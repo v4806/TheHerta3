@@ -323,9 +323,7 @@ class BluePrintModel:
 
             # 检查是否是多文件导出节点创建的对象
             if hasattr(obj_model, 'is_multifile_export') and obj_model.is_multifile_export:
-                # 通过节点名称查找节点对象
-                tree = BlueprintExportHelper.get_current_blueprint_tree()
-                multifile_node = tree.nodes.get(obj_model.multifile_node_name) if tree else None
+                multifile_node = BlueprintExportHelper.find_node_in_all_blueprints(obj_model.multifile_node_name)
                 
                 if not multifile_node:
                     LOG.warning(f"无法找到多文件导出节点: {obj_model.multifile_node_name}")

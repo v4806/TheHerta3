@@ -64,11 +64,15 @@ class SSMTNode_VertexGroupProcess(SSMTNodeBase):
 
     def get_connected_mapping_nodes(self):
         mapping_nodes = []
+        print(f"[VGProcess] {self.name}: 开始获取连接的映射表节点")
+        
         for i, socket in enumerate(self.inputs):
             if i > 0 and socket.is_linked:
                 for link in socket.links:
                     from_node = link.from_node
                     target_hash = getattr(from_node, 'target_hash', '')
+                    
+                    print(f"[VGProcess] {self.name}: 输入 {i} 连接到节点 '{from_node.name}', 类型: {from_node.bl_idname}, 哈希: '{target_hash}'")
                     
                     if from_node.bl_idname == 'SSMTNode_VertexGroupMatch':
                         if hasattr(from_node, 'source_object') and hasattr(from_node, 'target_object'):
@@ -78,6 +82,7 @@ class SSMTNode_VertexGroupProcess(SSMTNodeBase):
                                 'index': i,
                                 'type': 'match'
                             })
+                            print(f"[VGProcess] {self.name}: 添加匹配节点 '{from_node.name}'")
                     elif from_node.bl_idname == 'SSMTNode_VertexGroupMappingInput':
                         mapping_nodes.append({
                             'node': from_node,
@@ -85,6 +90,11 @@ class SSMTNode_VertexGroupProcess(SSMTNodeBase):
                             'index': i,
                             'type': 'input'
                         })
+                        print(f"[VGProcess] {self.name}: 添加输入节点 '{from_node.name}'")
+            elif i > 0:
+                print(f"[VGProcess] {self.name}: 输入 {i} 未连接")
+        
+        print(f"[VGProcess] {self.name}: 共找到 {len(mapping_nodes)} 个映射表节点")
         return mapping_nodes
 
     def get_merged_mapping_for_object(self, obj_name, mapping_nodes):
@@ -97,23 +107,31 @@ class SSMTNode_VertexGroupProcess(SSMTNodeBase):
             target_hash = node_info['target_hash']
             node_type = node_info.get('type', 'match')
             
+            print(f"[VGProcess] 检查映射节点: {node.name}, 哈希: '{target_hash}', 物体名: '{obj_name}'")
+            
             if target_hash and not obj_name.startswith(target_hash):
+                print(f"[VGProcess] 哈希不匹配，跳过: '{target_hash}' vs '{obj_name}'")
                 continue
+            
+            print(f"[VGProcess] 哈希匹配成功: '{target_hash}'")
             
             if node_type == 'input':
                 if hasattr(node, 'get_mapping_dict'):
                     mapping = node.get_mapping_dict()
+                    print(f"[VGProcess] 从映射输入节点获取到 {len(mapping)} 条映射")
                     merged_mapping.update(mapping)
             else:
-                source_obj_name = getattr(node, 'source_object', '')
                 target_obj_name = getattr(node, 'target_object', '')
                 
-                text_name = f"VG_Match_{source_obj_name}_to_{target_obj_name}"
+                text_name = f"VG_Match_{target_obj_name}"
                 text = bpy.data.texts.get(text_name)
                 
                 if text:
                     mapping = self.parse_mapping_text(text)
+                    print(f"[VGProcess] 从文本 '{text_name}' 解析到 {len(mapping)} 条映射")
                     merged_mapping.update(mapping)
+                else:
+                    print(f"[VGProcess] 警告: 未找到映射文本 '{text_name}'")
         
         return merged_mapping
 
@@ -181,18 +199,48 @@ class SSMTNode_VertexGroupProcess(SSMTNodeBase):
         return stats
 
     def _rename_vertex_groups(self, obj, mapping):
-        renamed_count = 0
+        import uuid
+        temp_prefix = f"__temp_{uuid.uuid4().hex[:8]}_"
+        
+        rename_pairs = []
         for vg in obj.vertex_groups:
             if vg.name in mapping:
                 new_name = mapping[vg.name]
                 if vg.name != new_name:
-                    try:
-                        if new_name in obj.vertex_groups:
-                            obj.vertex_groups[new_name].name = self.generate_unique_name(new_name, obj.vertex_groups)
-                        vg.name = new_name
-                        renamed_count += 1
-                    except Exception as e:
-                        print(f"[VGProcess] 重命名顶点组 {vg.name} -> {new_name} 失败: {e}")
+                    rename_pairs.append((vg.name, new_name))
+        
+        if not rename_pairs:
+            return 0
+        
+        print(f"[VGProcess] 两阶段重命名: {len(rename_pairs)} 个顶点组")
+        
+        for old_name, new_name in rename_pairs:
+            vg = obj.vertex_groups.get(old_name)
+            if vg:
+                temp_name = f"{temp_prefix}{old_name}"
+                vg.name = temp_name
+                print(f"[VGProcess] 阶段1: {old_name} -> {temp_name}")
+        
+        renamed_count = 0
+        for old_name, new_name in rename_pairs:
+            temp_name = f"{temp_prefix}{old_name}"
+            vg = obj.vertex_groups.get(temp_name)
+            if vg:
+                if new_name in obj.vertex_groups:
+                    existing_vg = obj.vertex_groups[new_name]
+                    existing_vg.name = f"{temp_prefix}conflict_{new_name}"
+                    print(f"[VGProcess] 冲突处理: 已存在的 {new_name} -> {existing_vg.name}")
+                
+                vg.name = new_name
+                renamed_count += 1
+                print(f"[VGProcess] 阶段2: {temp_name} -> {new_name}")
+        
+        for vg in obj.vertex_groups:
+            if vg.name.startswith(temp_prefix):
+                vg.name = vg.name[len(temp_prefix):]
+                if vg.name.startswith("conflict_"):
+                    vg.name = vg.name[len("conflict_"):]
+        
         return renamed_count
 
     def _merge_vertex_groups_by_prefix(self, obj):
