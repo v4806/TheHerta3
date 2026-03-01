@@ -32,6 +32,16 @@ class BlueprintExportHelper:
         return tree
 
     @staticmethod
+    def find_node_in_all_blueprints(node_name):
+        """在所有蓝图中查找指定名称的节点"""
+        for node_group in bpy.data.node_groups:
+            if node_group.bl_idname == 'SSMTBlueprintTreeType':
+                node = node_group.nodes.get(node_name)
+                if node:
+                    return node
+        return None
+
+    @staticmethod
     def get_node_from_bl_idname(tree, node_type:str):
         """在树中查找输出节点 (假设只有一个)"""
         if not tree:

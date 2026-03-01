@@ -660,61 +660,59 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         return result
     
     def _is_object_connected_to_vg_process(self, obj_name, vg_process_node, node_tree):
-        """检查物体是否连接到指定的顶点组处理节点"""
+        """检查物体是否连接到指定的顶点组处理节点（支持嵌套蓝图）"""
         visited = set()
         
-        def find_object_node_for_vg_process(current_node, target_vg_node, current_tree):
+        def find_all_object_names_for_vg_process(current_node, current_tree, depth=0):
+            """从顶点组处理节点开始，找到所有连接的物体名称"""
             if current_node in visited:
-                return None
+                return []
             visited.add(current_node)
             
-            if current_node == target_vg_node:
-                for input_socket in current_node.inputs:
-                    if input_socket.name == "物体" and input_socket.is_linked:
-                        for link in input_socket.links:
-                            obj_node = link.from_node
-                            if obj_node.bl_idname == 'SSMTNode_Object_Info':
-                                return getattr(obj_node, 'object_name', '')
-                            elif obj_node.bl_idname in ('SSMTNode_Object_Group', 'SSMTNode_ToggleKey', 'SSMTNode_SwitchKey', 'SSMTNode_VertexGroupProcess'):
-                                result = find_source_object_from_group_node(obj_node, current_tree, visited)
-                                if result:
-                                    return result
-                return None
+            indent = "  " * depth
+            print(f"[VGProcess]{indent} 搜索节点: {current_node.name} (类型: {current_node.bl_idname})")
+            
+            object_names = []
+            
+            if current_node.bl_idname == 'SSMTNode_Object_Info':
+                found_name = getattr(current_node, 'object_name', '')
+                if found_name:
+                    print(f"[VGProcess]{indent} 找到物体节点: {found_name}")
+                    return [found_name]
+            
+            elif current_node.bl_idname == 'SSMTNode_Blueprint_Nest':
+                blueprint_name = getattr(current_node, 'blueprint_name', '')
+                if blueprint_name:
+                    nested_tree = bpy.data.node_groups.get(blueprint_name)
+                    if nested_tree and nested_tree.bl_idname == 'SSMTBlueprintTreeType':
+                        for nested_node in nested_tree.nodes:
+                            if nested_node.bl_idname == 'SSMTNode_Result_Output':
+                                names = find_all_object_names_for_vg_process(nested_node, nested_tree, depth+1)
+                                object_names.extend(names)
             
             for input_socket in current_node.inputs:
                 for link in input_socket.links:
-                    result = find_object_node_for_vg_process(link.from_node, target_vg_node, current_tree)
-                    if result:
-                        return result
+                    names = find_all_object_names_for_vg_process(link.from_node, current_tree, depth+1)
+                    object_names.extend(names)
             
-            return None
+            return object_names
         
-        def find_source_object_from_group_node(group_node, current_tree, visited):
-            """从组节点中找到源物体名称"""
-            if group_node in visited:
-                return None
-            
-            visited.add(group_node)
-            
-            for input_socket in group_node.inputs:
-                if input_socket.is_linked:
+        def get_connected_object_names(vg_node, tree):
+            """获取顶点组处理节点连接的所有物体名称"""
+            object_names = []
+            for input_socket in vg_node.inputs:
+                if input_socket.name == "物体" and input_socket.is_linked:
                     for link in input_socket.links:
                         from_node = link.from_node
-                        if from_node.bl_idname == 'SSMTNode_Object_Info':
-                            return getattr(from_node, 'object_name', '')
-                        elif from_node.bl_idname in ('SSMTNode_Object_Group', 'SSMTNode_ToggleKey', 'SSMTNode_SwitchKey', 'SSMTNode_VertexGroupProcess'):
-                            result = find_source_object_from_group_node(from_node, current_tree, visited)
-                            if result:
-                                return result
-            return None
+                        print(f"[VGProcess] 物体输入连接到: {from_node.name} (类型: {from_node.bl_idname})")
+                        names = find_all_object_names_for_vg_process(from_node, tree, 1)
+                        object_names.extend(names)
+            return list(set(object_names))
         
-        for output_node in node_tree.nodes:
-            if output_node.bl_idname == 'SSMTNode_Result_Output':
-                found_obj_name = find_object_node_for_vg_process(output_node, vg_process_node, node_tree)
-                if found_obj_name and found_obj_name == obj_name:
-                    return True
+        connected_objects = get_connected_object_names(vg_process_node, node_tree)
+        print(f"[VGProcess] 顶点组处理节点 '{vg_process_node.name}' 连接的物体: {connected_objects}")
         
-        return False
+        return obj_name in connected_objects
     
     def _apply_vg_process_nodes(self, obj, vg_process_nodes):
         """应用顶点组处理节点到物体"""
