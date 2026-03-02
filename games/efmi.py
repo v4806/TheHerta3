@@ -126,7 +126,7 @@ class ModModelEFMI:
             # EFMI加载器中，提供了对贴图槽位的统一校验，以及提供了基于ShaderRegex的全局Check
             # 所以无需生成VSCheck.ini，也无需进行手动的贴图槽位Check了，节省了一些Mod制作步骤，在此进行同步
             texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CommandList\\EFMIv1\\OverrideTextures")
-            
+
             
             # 遍历获取所有在当前分类hash下进行替换的分类，并添加对应的资源替换
             for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
@@ -160,7 +160,9 @@ class ModModelEFMI:
 
             component_name = "Component " + part_name 
             component_model = draw_ib_model.component_name_component_model_dict[component_name]
-            drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+
+            # EFMI绘制调用改为drawindexedinstanced格式
+            drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(component_model.final_ordered_draw_obj_model_list)
             for drawindexed_str in drawindexed_str_list:
                 texture_override_ib_section.append(drawindexed_str)
             
