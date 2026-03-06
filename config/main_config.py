@@ -79,6 +79,35 @@ class GlobalConfig:
                 cls.logic_name = game_config_json.get("LogicName","")
         except Exception as e:
             print(e)
+
+    @classmethod
+    def read_from_main_json_ssmt4(cls) :
+        try:
+            main_json_path = GlobalConfig.path_main_json_ssmt4()
+            print("Reading SSMT4 main json from: " + main_json_path)
+            # 先从main_json_path里读取dbmt位置，也就是dbmt总工作空间的位置
+            # 在新架构中，总工作空间位置已不会再发生改变，所以用户只需要选择一次就可以了
+            if os.path.exists(main_json_path):
+                main_setting_file = open(main_json_path)
+                main_setting_json = json.load(main_setting_file)
+                main_setting_file.close()
+                cls.workspacename = main_setting_json.get("workspaceName","")
+                cls.gamename = main_setting_json.get("currentConfigName","")
+                cls.dbmtlocation = main_setting_json.get("cacheDir","") + "\\"
+                cls.ssmt_version_number = main_setting_json.get("VersionNumber",0)
+            else:
+                print("Can't find: " + main_json_path)
+            
+            game_config_json_path = os.path.join(GlobalConfig.path_ssmt4_global_configs_folder(),"Games\\" + cls.gamename + "\\Config.json")
+            if os.path.exists(game_config_json_path):
+                game_config_json_file = open(game_config_json_path)
+                game_config_json = json.load(game_config_json_file)
+                game_config_json_file.close()
+
+                cls.current_game_migoto_folder = game_config_json.get("installDir","")
+                cls.logic_name = game_config_json.get("gamePreset","")
+        except Exception as e:
+            print(e)
             
     @classmethod
     def base_path(cls):
@@ -171,6 +200,15 @@ class GlobalConfig:
     @classmethod
     def path_appdata_local(cls):
         return os.path.join(os.environ['LOCALAPPDATA'])
+    
+    @classmethod
+    def path_ssmt4_global_configs_folder(cls):
+        return os.path.join(GlobalConfig.path_appdata_local(),"SSMT4GlobalConfigs\\")
+
+    # 定义基础的Json文件路径
+    @classmethod
+    def path_main_json_ssmt4(cls):
+        return os.path.join(GlobalConfig.path_ssmt4_global_configs_folder(), "settings.json")
     
     @classmethod
     def path_ssmt3_global_configs_folder(cls):
