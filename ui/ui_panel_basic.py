@@ -6,6 +6,8 @@ import bpy
 from ..config.main_config import GlobalConfig, LogicName
 from ..config.plugin_config import PluginConfig
 
+from ..config.properties_import_model import Properties_ImportModel
+
 from ..utils.translate_utils import TR
 
 
@@ -22,8 +24,13 @@ class PanelBasicInformation(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+        
+        layout.prop(context.scene.properties_import_model,"use_ssmt4")
 
-        GlobalConfig.read_from_main_json()
+        if context.scene.properties_import_model.use_ssmt4:
+            GlobalConfig.read_from_main_json_ssmt4()
+        else:
+            GlobalConfig.read_from_main_json()
 
         self.bl_label =  "TheHerta3 V" +  PluginConfig.get_version_string() + "  SSMT V" + str(GlobalConfig.ssmt_version_number)
         layout.label(text=TR.translate("SSMT缓存文件夹路径: ") + GlobalConfig.dbmtlocation)
