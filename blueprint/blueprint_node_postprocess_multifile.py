@@ -82,7 +82,7 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
         """获取着色器模板文件路径"""
         try:
             addon_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            asset_source_dir = os.path.join(addon_dir, "超级工具集")
+            asset_source_dir = os.path.join(addon_dir, "Toolset")
             shader_source_path = os.path.join(asset_source_dir, "合并anim_packed_delta.hlsl")
             return shader_source_path
         except Exception as e:

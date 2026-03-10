@@ -664,10 +664,10 @@ class ModModelEFMI:
         复制跨IB所需的HLSL文件到模组res目录
         '''
         addon_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-        source_dir = os.path.join(addon_dir, "超级工具集")
+        source_dir = os.path.join(addon_dir, "Toolset")
         
         if not os.path.exists(source_dir):
-            print(f"[CrossIB] 警告: 超级工具集目录不存在: {source_dir}")
+            print(f"[CrossIB] 警告: Toolset目录不存在: {source_dir}")
             return
         
         hlsl_files = [
