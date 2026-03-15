@@ -15,38 +15,150 @@ from ..config.properties_generate_mod import Properties_GenerateMod
 from ..common.m_ini_helper import M_IniHelper,M_IniHelper
 from ..common.m_ini_helper_gui import M_IniHelperGUI
 
+
+class DrawIBModelAdapter:
+    '''
+    SSMT4 DrawIBModel 适配器
+    将 SubMeshModel 适配为 DrawIBModel 接口
+    '''
+    def __init__(self, submesh_model, branch_model_v4):
+        from ..base.m_draw_indexed import M_DrawIndexed
+        
+        self.draw_ib = submesh_model.match_draw_ib
+        self.draw_ib_alias = submesh_model.match_draw_ib
+        self.d3d11GameType = submesh_model.d3d11_game_type
+        self.draw_number = submesh_model.vertex_count
+        self.unique_str = submesh_model.unique_str
+        
+        unique_str = submesh_model.unique_str
+        
+        self.PartName_IBResourceName_Dict = {
+            "1": f"Resource_{unique_str.replace('-', '_')}_Index"
+        }
+        self.PartName_IBBufferFileName_Dict = {
+            "1": f"{unique_str}-Index.buf"
+        }
+        self.componentname_ibbuf_dict = {
+            "Component 1": submesh_model.ib
+        }
+        
+        self.category_hash_dict = {}
+        if submesh_model.d3d11_game_type:
+            self.category_hash_dict = getattr(submesh_model.d3d11_game_type, 'CategoryHashDict', {})
+        
+        self.import_config = None
+        
+        drawcall_model_list = submesh_model.drawcall_model_list
+        for drawcall_model in drawcall_model_list:
+            drawcall_model.drawindexed_obj = M_DrawIndexed()
+            drawcall_model.drawindexed_obj.DrawNumber = str(drawcall_model.index_count)
+            drawcall_model.drawindexed_obj.DrawOffsetIndex = str(drawcall_model.index_offset)
+            drawcall_model.drawindexed_obj.UniqueVertexCount = drawcall_model.vertex_count
+        
+        self._component_model = ComponentModelAdapter(drawcall_model_list)
+        self.component_name_component_model_dict = {
+            "Component 1": self._component_model
+        }
+        
+        self.key_number = len(branch_model_v4.keyname_mkey_dict) if branch_model_v4 else 0
+
+
+class ComponentModelAdapter:
+    '''
+    SSMT4 ComponentModel 适配器
+    '''
+    def __init__(self, drawcall_model_list):
+        self.component_name = "Component 1"
+        self.final_ordered_draw_obj_model_list = drawcall_model_list
+
+
 class ModModelEFMI:
-    def __init__(self, skip_buffer_export:bool = False):
-        # (1) 统计全局分支模型
-        self.branch_model = BluePrintModel()
+    def __init__(self, skip_buffer_export:bool = False, use_ssmt4:bool = False):
+        self.use_ssmt4 = use_ssmt4
+        
+        if use_ssmt4:
+            from ..common.export.blueprint_model_v4 import BluePrintModel_V4
+            from ..common.export.submesh_model import SubMeshModel
+            
+            self.branch_model = BluePrintModel_V4()
+            tree = BlueprintExportHelper.get_current_blueprint_tree()
+            if tree:
+                self.branch_model.initialize_from_tree(tree)
+                print(f"ModModelEFMI SSMT4: 解析完成，共收集 {len(self.branch_model.ordered_draw_obj_data_model_list)} 个物体")
+            
+            self.drawib_drawibmodel_dict: dict = {}
+            self._submesh_model_list: list = []
+            self._init_submesh_models(skip_buffer_export)
+        else:
+            self.branch_model = BluePrintModel()
+            self.drawib_drawibmodel_dict: dict[str, DrawIBModel] = {}
+            self.parse_draw_ib_draw_ib_model_dict(skip_buffer_export)
 
-        # (2) 抽象每个DrawIB为DrawIBModel
-        self.drawib_drawibmodel_dict:dict[str,DrawIBModel] = {}
-        self.parse_draw_ib_draw_ib_model_dict(skip_buffer_export)
-
-        # (3) 这些属性用于ini生成
         self.vlr_filter_index_indent = ""
         self.texture_hash_filter_index_dict = {}
         
-        # (4) 跨IB信息
         self.cross_ib_info_dict = self.branch_model.cross_ib_info_dict
-        self.cross_ib_method_dict = self.branch_model.cross_ib_method_dict
+        self.cross_ib_method_dict = getattr(self.branch_model, 'cross_ib_method_dict', {})
         self.has_cross_ib = len(self.cross_ib_info_dict) > 0
+        
+        if use_ssmt4:
+            self.cross_ib_target_info = getattr(self.branch_model, 'cross_ib_target_info', {})
+            self.cross_ib_match_mode = getattr(self.branch_model, 'cross_ib_match_mode', 'IB_HASH')
+            print(f"[CrossIB EFMI] SSMT4 模式，match_mode={self.cross_ib_match_mode}")
+            print(f"[CrossIB EFMI] cross_ib_info_dict={self.cross_ib_info_dict}")
+            print(f"[CrossIB EFMI] cross_ib_target_info={self.cross_ib_target_info}")
+            print(f"[CrossIB EFMI] cross_ib_object_names={self.branch_model.cross_ib_object_names}")
+        else:
+            self.cross_ib_target_info = {}
+            self.cross_ib_match_mode = 'IB_HASH'
+    
+    def _init_submesh_models(self, skip_buffer_export: bool = False):
+        from ..common.export.submesh_model import SubMeshModel
+        
+        draw_call_model_dict: dict = {}
+        
+        for draw_call_model in self.branch_model.ordered_draw_obj_data_model_list:
+            unique_str = draw_call_model.get_unique_str()
+            draw_call_model_list = draw_call_model_dict.get(unique_str, [])
+            draw_call_model_list.append(draw_call_model)
+            draw_call_model_dict[unique_str] = draw_call_model_list
+
+        for unique_str, draw_call_model_list in draw_call_model_dict.items():
+            submesh_model = SubMeshModel(drawcall_model_list=draw_call_model_list)
+            self._submesh_model_list.append(submesh_model)
+            
+            adapter = DrawIBModelAdapter(submesh_model, self.branch_model)
+            adapter_key = f"{adapter.draw_ib}_{submesh_model.match_index_count}"
+            self.drawib_drawibmodel_dict[adapter_key] = adapter
+        
+        if not skip_buffer_export:
+            self._export_buffers()
+    
+    def _export_buffers(self):
+        import struct
+        
+        buf_output_folder = GlobalConfig.path_generatemod_buffer_folder()
+
+        for submesh_model in self._submesh_model_list:
+            if len(submesh_model.ib) > 0:
+                ib_filename = submesh_model.unique_str + "-Index.buf"
+                ib_filepath = os.path.join(buf_output_folder, ib_filename)
+                packed_data = struct.pack(f'<{len(submesh_model.ib)}I', *submesh_model.ib)
+                with open(ib_filepath, 'wb') as ibf:
+                    ibf.write(packed_data)
+
+            for category, category_buf in submesh_model.category_buffer_dict.items():
+                category_buf_filename = submesh_model.unique_str + "-" + category + ".buf"
+                category_buf_filepath = os.path.join(buf_output_folder, category_buf_filename)
+                with open(category_buf_filepath, 'wb') as f:
+                    category_buf.tofile(f)
 
     def parse_draw_ib_draw_ib_model_dict(self, skip_buffer_export:bool = False):
-        '''
-        根据obj的命名规则，推导出DrawIB并抽象为DrawIBModel
-        如果用户用不到某个DrawIB的话，就可以隐藏掉对应的obj
-        隐藏掉的obj就不会被统计生成DrawIBModel，做到只导入模型，不生成Mod的效果。
-        '''
         for draw_ib in self.branch_model.draw_ib__component_count_list__dict.keys():
             draw_ib_model = DrawIBModel(draw_ib=draw_ib,branch_model=self.branch_model, skip_buffer_export=skip_buffer_export)
             self.drawib_drawibmodel_dict[draw_ib] = draw_ib_model
 
     def add_cross_ib_present_section(self, ini_builder:M_IniBuilder):
-        '''
-        添加跨IB特殊追加固定区域
-        '''
         if not self.has_cross_ib:
             return
         
@@ -144,6 +256,7 @@ class ModModelEFMI:
             ("ShaderOverridevs88", "f0e7d4b491273aae", "203"),
         ]
         
+        
         for name, hash_val, filter_idx in shader_overrides:
             present_section.append(f"[{name}]")
             present_section.append(f"hash = {hash_val}")
@@ -153,30 +266,43 @@ class ModModelEFMI:
         ini_builder.append_section(present_section)
 
     def add_cross_ib_resource_id_sections(self, ini_builder:M_IniBuilder):
-        '''
-        添加跨IB身份块
-        '''
         if not self.has_cross_ib:
             return
         
         resource_id_section = M_IniSection(M_SectionType.ResourceID)
         resource_id_section.append(";特殊追加身份证区域")
         
-        all_ibs = set()
-        for source_ib, target_ib_list in self.cross_ib_info_dict.items():
-            source_hash = source_ib.split("_")[0]
-            all_ibs.add(source_hash)
-            for target_ib in target_ib_list:
-                target_hash = target_ib.split("_")[0]
-                all_ibs.add(target_hash)
+        all_identifiers = set()
         
-        for draw_ib in self.drawib_drawibmodel_dict.keys():
-            all_ibs.add(draw_ib)
+        if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+            for source_key, target_key_list in self.cross_ib_info_dict.items():
+                if source_key.startswith('indexcount_'):
+                    index_count = source_key.replace('indexcount_', '')
+                    all_identifiers.add(index_count)
+                for target_key in target_key_list:
+                    if target_key.startswith('indexcount_'):
+                        index_count = target_key.replace('indexcount_', '')
+                        all_identifiers.add(index_count)
+            
+            for submesh_model in self._submesh_model_list:
+                if submesh_model.match_index_count:
+                    all_identifiers.add(submesh_model.match_index_count)
+        else:
+            for source_ib, target_ib_list in self.cross_ib_info_dict.items():
+                source_hash = source_ib.split("_")[0]
+                all_identifiers.add(source_hash)
+                for target_ib in target_ib_list:
+                    target_hash = target_ib.split("_")[0]
+                    all_identifiers.add(target_hash)
+            
+            for adapter_key in self.drawib_drawibmodel_dict.keys():
+                draw_ib = adapter_key.split("_")[0]
+                all_identifiers.add(draw_ib)
         
-        sorted_ibs = sorted(list(all_ibs))
+        sorted_identifiers = sorted(list(all_identifiers))
         
-        for idx, ib in enumerate(sorted_ibs):
-            resource_id_section.append(f"[ResourceID_{ib}]")
+        for idx, identifier in enumerate(sorted_identifiers):
+            resource_id_section.append(f"[ResourceID_{identifier}]")
             resource_id_section.append("type = Buffer")
             resource_id_section.append("format = R32_FLOAT")
             resource_id_section.append(f"data = {idx * 1000}.0")
@@ -185,29 +311,26 @@ class ModModelEFMI:
         ini_builder.append_section(resource_id_section)
 
     def get_cross_ib_objects_for_source(self, source_ib):
-        '''
-        获取指定源IB的所有跨IB物体
-        '''
         cross_ib_objects = []
         
         for obj_model in self.branch_model.ordered_draw_obj_data_model_list:
-            if obj_model.draw_ib == source_ib:
-                cross_ib_objects.append(obj_model)
+            if self.use_ssmt4:
+                if hasattr(obj_model, 'match_draw_ib') and obj_model.match_draw_ib == source_ib:
+                    cross_ib_objects.append(obj_model)
+            else:
+                if obj_model.draw_ib == source_ib:
+                    cross_ib_objects.append(obj_model)
         
         return cross_ib_objects
 
     def _split_objects_by_cross_ib(self, obj_model_list):
-        '''
-        将物体列表分为跨IB物体和非跨IB物体
-        返回: (cross_ib_objects, non_cross_ib_objects)
-        '''
         cross_ib_objects = []
         non_cross_ib_objects = []
         
         cross_ib_object_names = self.branch_model.cross_ib_object_names
         
         for obj_model in obj_model_list:
-            obj_name = obj_model.obj_name
+            obj_name = obj_model.obj_name if hasattr(obj_model, 'obj_name') else getattr(obj_model, 'obj_name', '')
             if obj_name in cross_ib_object_names:
                 cross_ib_objects.append(obj_model)
             else:
@@ -215,15 +338,12 @@ class ModModelEFMI:
         
         return cross_ib_objects, non_cross_ib_objects
 
-    def generate_cross_ib_block_for_source(self, source_ib, component_model):
-        '''
-        生成源IB的跨IB块内容
-        '''
+    def generate_cross_ib_block_for_source(self, source_identifier, component_model):
         lines = []
         lines.append(";跨 iB 区域")
         lines.append("if vs == 200 || vs == 201")
         lines.append("    run = CustomShader_ExtractCB1")
-        lines.append(f"    cs-t2 = ResourceID_{source_ib}")
+        lines.append(f"    cs-t2 = ResourceID_{source_identifier}")
         lines.append("    run = CustomShader_RecordBones")
         lines.append("    run = CustomShader_RedirectCB1")
         lines.append("    vs-t0 = ResourceFakeT0_SRV")
@@ -235,7 +355,7 @@ class ModModelEFMI:
         )
         
         if cross_ib_objects:
-            drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(cross_ib_objects)
+            drawindexed_str_list = self._get_drawindexed_str_list(cross_ib_objects)
             for drawindexed_str in drawindexed_str_list:
                 if drawindexed_str.strip():
                     lines.append(drawindexed_str)
@@ -244,7 +364,7 @@ class ModModelEFMI:
         lines.append(";不需要跨 Ib 的物体引用")
         
         if non_cross_ib_objects:
-            drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(non_cross_ib_objects)
+            drawindexed_str_list = self._get_drawindexed_str_list(non_cross_ib_objects)
             for drawindexed_str in drawindexed_str_list:
                 if drawindexed_str.strip():
                     lines.append(drawindexed_str)
@@ -255,30 +375,87 @@ class ModModelEFMI:
         lines.append("post cs-t2 = null")
         
         return lines
+    
+    def _get_drawindexed_str_list(self, obj_model_list):
+        if self.use_ssmt4:
+            return self._get_drawindexed_str_list_v4(obj_model_list)
+        else:
+            return M_IniHelper.get_drawindexed_instanced_str_list(obj_model_list)
+    
+    def _get_drawindexed_str_list_v4(self, drawcall_model_list):
+        from ..base.m_draw_indexed import M_DrawIndexedInstanced
+        
+        condition_str_obj_list_dict: dict = {}
+        for drawcall_model in drawcall_model_list:
+            condition_str = ""
+            if hasattr(drawcall_model, 'condition') and drawcall_model.condition:
+                condition_str = getattr(drawcall_model.condition, 'condition_str', '')
+            
+            obj_list = condition_str_obj_list_dict.get(condition_str, [])
+            obj_list.append(drawcall_model)
+            condition_str_obj_list_dict[condition_str] = obj_list
+        
+        drawindexed_str_list = []
+        for condition_str, obj_list in condition_str_obj_list_dict.items():
+            if condition_str != "":
+                drawindexed_str_list.append(f"if {condition_str}")
+                for drawcall_model in obj_list:
+                    display_name = getattr(drawcall_model, 'display_name', drawcall_model.obj_name)
+                    vertex_count = getattr(drawcall_model, 'vertex_count', 0)
+                    drawindexed_str_list.append(f"  ; [mesh:{display_name}] [vertex_count:{vertex_count}]")
+                    
+                    drawindexed_instanced = M_DrawIndexedInstanced()
+                    drawindexed_instanced.IndexCountPerInstance = drawcall_model.index_count
+                    drawindexed_instanced.StartIndexLocation = drawcall_model.index_offset
+                    drawindexed_str_list.append("  " + drawindexed_instanced.get_draw_str())
+                drawindexed_str_list.append("endif")
+            else:
+                for drawcall_model in obj_list:
+                    display_name = getattr(drawcall_model, 'display_name', drawcall_model.obj_name)
+                    vertex_count = getattr(drawcall_model, 'vertex_count', 0)
+                    drawindexed_str_list.append(f"; [mesh:{display_name}] [vertex_count:{vertex_count}]")
+                    
+                    drawindexed_instanced = M_DrawIndexedInstanced()
+                    drawindexed_instanced.IndexCountPerInstance = drawcall_model.index_count
+                    drawindexed_instanced.StartIndexLocation = drawcall_model.index_offset
+                    drawindexed_str_list.append(drawindexed_instanced.get_draw_str())
+            drawindexed_str_list.append("")
+        
+        return drawindexed_str_list
 
- 
-
-    def add_unity_vs_texture_override_ib_sections(self, config_ini_builder:M_IniBuilder, commandlist_ini_builder:M_IniBuilder, draw_ib_model:DrawIBModel, is_cross_ib_source=False, is_cross_ib_target=False, source_ib_list_for_target=None, part_name=None):
+    def add_unity_vs_texture_override_ib_sections(self, config_ini_builder:M_IniBuilder, commandlist_ini_builder:M_IniBuilder, draw_ib_model, is_cross_ib_source=False, is_cross_ib_target=False, source_ib_list_for_target=None, part_name=None, match_first_index="0", match_index_count=0, current_identifier=None):
         if source_ib_list_for_target is None:
             source_ib_list_for_target = []
         
         texture_override_ib_section = M_IniSection(M_SectionType.TextureOverrideIB)
         draw_ib = draw_ib_model.draw_ib
         
+        if current_identifier is None:
+            if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+                current_identifier = str(match_index_count) if match_index_count > 0 else draw_ib
+            else:
+                current_identifier = draw_ib
+        
         d3d11GameType = draw_ib_model.d3d11GameType
 
-        match_first_index = draw_ib_model.import_config.match_first_index_list[draw_ib_model.import_config.part_name_list.index(part_name)]
-        style_part_name = "Component" + part_name
-
-        texture_override_name_suffix = "IB_" + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_" + style_part_name
+        if self.use_ssmt4:
+            texture_override_name_suffix = draw_ib + "_" + str(match_index_count) + "_" + str(match_first_index)
+        else:
+            style_part_name = "Component" + part_name
+            texture_override_name_suffix = "IB_" + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_" + style_part_name
 
         ib_resource_name = ""
-        ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(part_name,None)
-            
+        if self.use_ssmt4:
+            ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get("1", "")
+        else:
+            ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(part_name, None)
 
         texture_override_ib_section.append("[TextureOverride_" + texture_override_name_suffix + "]")
         texture_override_ib_section.append("hash = " + draw_ib)
         texture_override_ib_section.append("match_first_index = " + match_first_index)
+        
+        if self.use_ssmt4 and match_index_count > 0:
+            texture_override_ib_section.append("match_index_count = " + str(match_index_count))
 
         if self.vlr_filter_index_indent != "":
             texture_override_ib_section.append("if vb0 == " + str(3000 + M_GlobalKeyCounter.generated_mod_number))
@@ -288,7 +465,8 @@ class ModModelEFMI:
         if is_cross_ib_target:
             texture_override_ib_section.append(self.vlr_filter_index_indent + "analyse_options = deferred_ctx_immediate dump_rt dump_cb dump_vb dump_ib buf txt dds dump_tex dds symlink")
 
-        ib_buf = draw_ib_model.componentname_ibbuf_dict.get("Component " + part_name,None)
+        component_name = "Component 1" if self.use_ssmt4 else "Component " + part_name
+        ib_buf = draw_ib_model.componentname_ibbuf_dict.get(component_name, None)
         if ib_buf is None or len(ib_buf) == 0:
             texture_override_ib_section.append("ib = null")
             texture_override_ib_section.new_line()
@@ -297,75 +475,105 @@ class ModModelEFMI:
 
         texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CommandList\\EFMIv1\\OverrideTextures")
 
-        if not Properties_GenerateMod.forbid_auto_texture_ini():
-            texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name,None)
-            if texture_markup_info_list is not None:
-                if Properties_GenerateMod.use_rabbitfx_slot():
-                    for texture_markup_info in texture_markup_info_list:
-                        if texture_markup_info.mark_type == "Slot":
-                            if texture_markup_info.mark_name == "DiffuseMap":
-                                texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\Diffuse = ref " + texture_markup_info.get_resource_name())
-                            elif texture_markup_info.mark_name == "LightMap":
-                                texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\LightMap = ref " + texture_markup_info.get_resource_name())
-                            elif texture_markup_info.mark_name == "NormalMap":
-                                texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\NormalMap = ref " + texture_markup_info.get_resource_name())
-                    
-                    texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CommandList\\RabbitFx\\SetTextures")
-                    
-                    for texture_markup_info in texture_markup_info_list:
-                        if texture_markup_info.mark_type == "Slot":
-                            if texture_markup_info.mark_name in ["DiffuseMap", "LightMap", "NormalMap"]:
-                                pass
-                            else:
+        if not self.use_ssmt4:
+            if not Properties_GenerateMod.forbid_auto_texture_ini():
+                texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name, None)
+                if texture_markup_info_list is not None:
+                    if Properties_GenerateMod.use_rabbitfx_slot():
+                        for texture_markup_info in texture_markup_info_list:
+                            if texture_markup_info.mark_type == "Slot":
+                                if texture_markup_info.mark_name == "DiffuseMap":
+                                    texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\Diffuse = ref " + texture_markup_info.get_resource_name())
+                                elif texture_markup_info.mark_name == "LightMap":
+                                    texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\LightMap = ref " + texture_markup_info.get_resource_name())
+                                elif texture_markup_info.mark_name == "NormalMap":
+                                    texture_override_ib_section.append(self.vlr_filter_index_indent + "Resource\\RabbitFx\\NormalMap = ref " + texture_markup_info.get_resource_name())
+                        
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CommandList\\RabbitFx\\SetTextures")
+                        
+                        for texture_markup_info in texture_markup_info_list:
+                            if texture_markup_info.mark_type == "Slot":
+                                if texture_markup_info.mark_name in ["DiffuseMap", "LightMap", "NormalMap"]:
+                                    pass
+                                else:
+                                    texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
+                    else:
+                        for texture_markup_info in texture_markup_info_list:
+                            if texture_markup_info.mark_type == "Slot":
                                 texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
-                else:
-                    for texture_markup_info in texture_markup_info_list:
-                        if texture_markup_info.mark_type == "Slot":
-                            texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
 
-        for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
-            category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
-            texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = Resource" + draw_ib + original_category_name)
+        if d3d11GameType:
+            if self.use_ssmt4:
+                unique_str = draw_ib_model.unique_str
+                for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
+                    category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
+                    resource_name = f"Resource_{unique_str.replace('-', '_')}_{original_category_name}"
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = " + resource_name)
 
-        if Properties_GenerateMod.add_rain_effect():
-            texture_override_ib_section.append(self.vlr_filter_index_indent + "vb3 = Resource" + draw_ib + "Position")
+                if Properties_GenerateMod.add_rain_effect():
+                    resource_name = f"Resource_{unique_str.replace('-', '_')}_Position"
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "vb3 = " + resource_name)
+            else:
+                for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
+                    category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = Resource" + draw_ib + original_category_name)
+
+                if Properties_GenerateMod.add_rain_effect():
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "vb3 = Resource" + draw_ib + "Position")
 
         texture_override_ib_section.append(self.vlr_filter_index_indent + "ib = " + ib_resource_name)
 
-        if not d3d11GameType.GPU_PreSkinning:
-            for category_name in d3d11GameType.OrderedCategoryNameList:
-                category_hash = draw_ib_model.import_config.category_hash_dict[category_name]
-                category_slot = d3d11GameType.CategoryExtractSlotDict[category_name]
+        if d3d11GameType and not d3d11GameType.GPU_PreSkinning:
+            if self.use_ssmt4:
+                unique_str = draw_ib_model.unique_str
+                for category_name in d3d11GameType.OrderedCategoryNameList:
+                    for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
+                        if original_category_name == draw_category_name:
+                            category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
+                            resource_name = f"Resource_{unique_str.replace('-', '_')}_{original_category_name}"
+                            texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = " + resource_name)
+            else:
+                for category_name in d3d11GameType.OrderedCategoryNameList:
+                    category_slot = d3d11GameType.CategoryExtractSlotDict[category_name]
 
-                for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
-                    if original_category_name == draw_category_name:
-                        category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
-                        texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = Resource" + draw_ib + original_category_name)
+                    for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
+                        if original_category_name == draw_category_name:
+                            category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
+                            texture_override_ib_section.append(self.vlr_filter_index_indent + category_original_slot + " = Resource" + draw_ib + original_category_name)
 
-
-        component_name = "Component " + part_name 
-        component_model = draw_ib_model.component_name_component_model_dict[component_name]
+        component_model = draw_ib_model.component_name_component_model_dict.get(component_name)
+        if component_model is None:
+            component_model = draw_ib_model.component_name_component_model_dict.get("Component 1")
 
         if is_cross_ib_source and self.has_cross_ib:
-            cross_ib_lines = self.generate_cross_ib_block_for_source(draw_ib, component_model)
+            cross_ib_lines = self.generate_cross_ib_block_for_source(current_identifier, component_model)
             for line in cross_ib_lines:
                 texture_override_ib_section.append(self.vlr_filter_index_indent + line)
         
         elif is_cross_ib_target and self.has_cross_ib and source_ib_list_for_target:
             all_cross_ib_objects = []
-            all_non_cross_ib_objects = []
             
             for source_ib in source_ib_list_for_target:
-                source_hash, source_component_index = source_ib.split("_")
-                source_component_index = int(source_component_index)
-                source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+                    source_identifier = source_ib.replace('indexcount_', '') if source_ib.startswith('indexcount_') else source_ib.split("_")[0]
+                    source_adapter_key = None
+                    for key, adapter in self.drawib_drawibmodel_dict.items():
+                        if key.endswith(f"_{source_identifier}"):
+                            source_adapter_key = key
+                            source_ib_model = adapter
+                            break
+                    if source_adapter_key is None:
+                        continue
+                else:
+                    source_hash, source_component_index = source_ib.split("_")
+                    source_component_index = int(source_component_index)
+                    source_identifier = source_hash
+                    source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                
                 source_component_model = None
                 if source_ib_model:
-                    if source_component_index <= len(source_ib_model.import_config.part_name_list):
-                        src_part_name = source_ib_model.import_config.part_name_list[source_component_index - 1]
-                        src_component_name = "Component " + src_part_name
-                        if src_component_name in source_ib_model.component_name_component_model_dict:
-                            source_component_model = source_ib_model.component_name_component_model_dict[src_component_name]
+                    src_component_name = "Component 1" if self.use_ssmt4 else f"Component {source_component_index}"
+                    source_component_model = source_ib_model.component_name_component_model_dict.get(src_component_name)
                 
                 if source_component_model:
                     cross_objs, _ = self._split_objects_by_cross_ib(
@@ -373,14 +581,10 @@ class ModModelEFMI:
                     )
                     all_cross_ib_objects.extend(cross_objs)
             
-            cross_ib_objects_in_target, non_cross_ib_objects_in_target = self._split_objects_by_cross_ib(
-                component_model.final_ordered_draw_obj_model_list
-            )
-            
             texture_override_ib_section.append(self.vlr_filter_index_indent + ";跨 iB 区域(当前块身份绘制,所有需要跨 Ib 的物体引用)")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "if vs == 200 || vs == 201")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_ExtractCB1")
-            texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{draw_ib}")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{current_identifier}")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RecordBones")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "    vs-t0 = ResourceFakeT0_SRV")
@@ -388,36 +592,48 @@ class ModModelEFMI:
             texture_override_ib_section.append(self.vlr_filter_index_indent + ";所有需要跨 Ib 的物体引用")
             
             if all_cross_ib_objects:
-                drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(all_cross_ib_objects)
+                drawindexed_str_list = self._get_drawindexed_str_list(all_cross_ib_objects)
                 for drawindexed_str in drawindexed_str_list:
                     if drawindexed_str.strip():
                         texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
             
             texture_override_ib_section.append(self.vlr_filter_index_indent + "endif")
             texture_override_ib_section.append(self.vlr_filter_index_indent + ";当前块身份,绘制当前块本身拥有的物体")
-            texture_override_ib_section.append(self.vlr_filter_index_indent + f"cs-t2 = ResourceID_{draw_ib}")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + f"cs-t2 = ResourceID_{current_identifier}")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CustomShader_RedirectCB1")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "vs-t0 = ResourceFakeT0_SRV")
             texture_override_ib_section.append(self.vlr_filter_index_indent + "vs-cb1 = ResourceFakeCB1")
             
-            all_target_objects = component_model.final_ordered_draw_obj_model_list
+            all_target_objects = component_model.final_ordered_draw_obj_model_list if component_model else []
             if all_target_objects:
-                drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(all_target_objects)
+                drawindexed_str_list = self._get_drawindexed_str_list(all_target_objects)
                 for drawindexed_str in drawindexed_str_list:
                     if drawindexed_str.strip():
                         texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
             
             for source_ib in source_ib_list_for_target:
-                source_hash, source_component_index = source_ib.split("_")
-                source_component_index = int(source_component_index)
-                source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+                    source_identifier = source_ib.replace('indexcount_', '') if source_ib.startswith('indexcount_') else source_ib.split("_")[0]
+                    source_adapter_key = None
+                    source_ib_model = None
+                    for key, adapter in self.drawib_drawibmodel_dict.items():
+                        if key.endswith(f"_{source_identifier}"):
+                            source_adapter_key = key
+                            source_ib_model = adapter
+                            break
+                    if source_adapter_key is None:
+                        continue
+                    source_hash = source_adapter_key.split("_")[0]
+                else:
+                    source_hash, source_component_index = source_ib.split("_")
+                    source_component_index = int(source_component_index)
+                    source_identifier = source_hash
+                    source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                
                 source_component_model = None
                 if source_ib_model:
-                    if source_component_index <= len(source_ib_model.import_config.part_name_list):
-                        src_part_name = source_ib_model.import_config.part_name_list[source_component_index - 1]
-                        src_component_name = "Component " + src_part_name
-                        if src_component_name in source_ib_model.component_name_component_model_dict:
-                            source_component_model = source_ib_model.component_name_component_model_dict[src_component_name]
+                    src_component_name = "Component 1" if self.use_ssmt4 else f"Component {source_component_index}"
+                    source_component_model = source_ib_model.component_name_component_model_dict.get(src_component_name)
                 
                 cross_objs, _ = self._split_objects_by_cross_ib(
                     source_component_model.final_ordered_draw_obj_model_list if source_component_model else []
@@ -426,26 +642,32 @@ class ModModelEFMI:
                 if not cross_objs:
                     continue
                 
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f";跨 IB 身份块,绘制 {source_hash} 需要跨 Ib 的物体引用")
+                texture_override_ib_section.append(self.vlr_filter_index_indent + f";跨 IB 身份块,绘制 {source_identifier} 需要跨 Ib 的物体引用")
                 texture_override_ib_section.append(self.vlr_filter_index_indent + "if vs == 202 || vs == 203")
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{source_hash}")
+                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{source_identifier}")
                 texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
                 texture_override_ib_section.append(self.vlr_filter_index_indent + "    ;跨 IB 块数据区域")
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb0 = Resource{source_hash}Position")
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb1 = Resource{source_hash}Texcoord")
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb2 = Resource{source_hash}Blend")
-                texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb3 = Resource{source_hash}Position")
+                
+                if self.use_ssmt4 and source_ib_model:
+                    source_unique_str = source_ib_model.unique_str
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb0 = Resource_{source_unique_str.replace('-', '_')}_Position")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb1 = Resource_{source_unique_str.replace('-', '_')}_Texcoord")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb2 = Resource_{source_unique_str.replace('-', '_')}_Blend")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb3 = Resource_{source_unique_str.replace('-', '_')}_Position")
+                else:
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb0 = Resource{source_hash}Position")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb1 = Resource{source_hash}Texcoord")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb2 = Resource{source_hash}Blend")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb3 = Resource{source_hash}Position")
                 
                 if source_ib_model:
-                    if source_component_index <= len(source_ib_model.import_config.part_name_list):
-                        src_part_name = source_ib_model.import_config.part_name_list[source_component_index - 1]
-                        ib_resource_name = source_ib_model.PartName_IBResourceName_Dict.get(src_part_name)
-                        if ib_resource_name:
-                            texture_override_ib_section.append(self.vlr_filter_index_indent + f"    ib = {ib_resource_name}")
+                    src_ib_resource_name = source_ib_model.PartName_IBResourceName_Dict.get("1")
+                    if src_ib_resource_name:
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    ib = {src_ib_resource_name}")
                 
                 texture_override_ib_section.append(self.vlr_filter_index_indent + ";所有需要跨 Ib 的物体引用")
                 
-                drawindexed_str_list = M_IniHelper.get_drawindexed_instanced_str_list(cross_objs)
+                drawindexed_str_list = self._get_drawindexed_str_list(cross_objs)
                 for drawindexed_str in drawindexed_str_list:
                     if drawindexed_str.strip():
                         texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
@@ -458,9 +680,11 @@ class ModModelEFMI:
             texture_override_ib_section.append(self.vlr_filter_index_indent + "post cs-t2 = null")
         
         else:
-            drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
-            for drawindexed_str in drawindexed_str_list:
-                texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
+            if component_model:
+                drawindexed_str_list = self._get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+                for drawindexed_str in drawindexed_str_list:
+                    if drawindexed_str.strip():
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
         
         if self.vlr_filter_index_indent:
             texture_override_ib_section.append("endif")
@@ -475,30 +699,29 @@ class ModModelEFMI:
         config_ini_builder.append_section(texture_override_ib_section)
 
 
-    def add_unity_vs_resource_vb_sections(self,ini_builder,draw_ib_model:DrawIBModel):
-        '''
-        Add Resource VB Section
-        '''
+    def add_unity_vs_resource_vb_sections(self, ini_builder, draw_ib_model, unique_str=None):
         resource_vb_section = M_IniSection(M_SectionType.ResourceBuffer)
-        for category_name in draw_ib_model.d3d11GameType.OrderedCategoryNameList:
-            resource_vb_section.append("[Resource" + draw_ib_model.draw_ib + category_name + "]")
-            resource_vb_section.append("type = Buffer")
-
-            resource_vb_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
-            
-            buffer_folder_name = GlobalConfig.get_buffer_folder_name()
-            resource_vb_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
-            # resource_vb_section.append(";VertexCount: " + str(draw_ib_model.draw_number))
-            resource_vb_section.new_line()
         
-        '''
-        Add Resource IB Section
-
-        We default use R32_UINT because R16_UINT have a very small number limit.
-        '''
+        if self.use_ssmt4 and unique_str:
+            for category_name in draw_ib_model.d3d11GameType.OrderedCategoryNameList:
+                resource_name = f"Resource_{unique_str.replace('-', '_')}_{category_name}"
+                resource_vb_section.append(f"[{resource_name}]")
+                resource_vb_section.append("type = Buffer")
+                resource_vb_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
+                buffer_folder_name = GlobalConfig.get_buffer_folder_name()
+                resource_vb_section.append("filename = " + buffer_folder_name + "/" + unique_str + "-" + category_name + ".buf")
+                resource_vb_section.new_line()
+        else:
+            for category_name in draw_ib_model.d3d11GameType.OrderedCategoryNameList:
+                resource_vb_section.append("[Resource" + draw_ib_model.draw_ib + category_name + "]")
+                resource_vb_section.append("type = Buffer")
+                resource_vb_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
+                buffer_folder_name = GlobalConfig.get_buffer_folder_name()
+                resource_vb_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
+                resource_vb_section.new_line()
 
         for partname, ib_filename in draw_ib_model.PartName_IBBufferFileName_Dict.items():
-            ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(partname,None)
+            ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(partname, None)
             resource_vb_section.append("[" + ib_resource_name + "]")
             resource_vb_section.append("type = Buffer")
             resource_vb_section.append("format = DXGI_FORMAT_R32_UINT")
@@ -509,13 +732,12 @@ class ModModelEFMI:
         ini_builder.append_section(resource_vb_section)
 
 
-    def add_resource_texture_sections(self,ini_builder,draw_ib_model:DrawIBModel):
-        '''
-        Add texture resource.
-        只有槽位风格贴图会用到，因为Hash风格贴图有专门的方法去声明这个。
-        '''
+    def add_resource_texture_sections(self, ini_builder, draw_ib_model):
         if Properties_GenerateMod.forbid_auto_texture_ini():
             return 
+        
+        if self.use_ssmt4:
+            return
         
         resource_texture_section = M_IniSection(M_SectionType.ResourceTexture)
         for partname, texture_markup_info_list in draw_ib_model.import_config.partname_texturemarkinfolist_dict.items():
@@ -528,8 +750,10 @@ class ModModelEFMI:
         ini_builder.append_section(resource_texture_section)
 
 
-    def add_unity_cs_texture_override_vb_sections(self,config_ini_builder:M_IniBuilder,commandlist_ini_builder:M_IniBuilder,draw_ib_model:DrawIBModel):
-        # 声明TextureOverrideVB部分，只有使用GPU-PreSkinning时是直接替换hash对应槽位
+    def add_unity_cs_texture_override_vb_sections(self, config_ini_builder:M_IniBuilder, commandlist_ini_builder:M_IniBuilder, draw_ib_model):
+        if self.use_ssmt4:
+            return
+        
         d3d11GameType = draw_ib_model.d3d11GameType
         draw_ib = draw_ib_model.draw_ib
 
@@ -552,16 +776,12 @@ class ModModelEFMI:
                 else:
                     texture_override_vb_section.append("[TextureOverride_" + texture_override_vb_namesuffix + "]")
                 texture_override_vb_section.append("hash = " + category_hash)
-                
 
-
-                # 如果出现了VertexLimitRaise，Texcoord槽位需要检测filter_index才能替换
                 filterindex_indent_prefix = ""
                 if category_name == d3d11GameType.CategoryDrawCategoryDict["Texcoord"]:
                     if self.vlr_filter_index_indent != "":
                         texture_override_vb_section.append("if vb0 == " + str(3000 + M_GlobalKeyCounter.generated_mod_number))
 
-                # 遍历获取所有在当前分类hash下进行替换的分类，并添加对应的资源替换
                 for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
                     if category_name == draw_category_name:
                         if original_category_name == "Position":
@@ -569,7 +789,6 @@ class ModModelEFMI:
 
                             position_category_slot = d3d11GameType.CategoryExtractSlotDict["Position"]
                             blend_category_slot = d3d11GameType.CategoryExtractSlotDict["Blend"]
-                            # print(position_category_slot)
 
                             texture_override_vb_section.append(position_category_slot + " = Resource" + draw_ib + "Position")
                             texture_override_vb_section.append(blend_category_slot + " = Resource" + draw_ib + "Blend")
@@ -582,25 +801,20 @@ class ModModelEFMI:
                             category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
                             texture_override_vb_section.append(filterindex_indent_prefix  + category_original_slot + " = Resource" + draw_ib + original_category_name)
 
-                # 对应if vb0 == 3000的结束
                 if category_name == d3d11GameType.CategoryDrawCategoryDict["Texcoord"]:
                     if self.vlr_filter_index_indent != "":
                         texture_override_vb_section.append("endif")
                 
-                # 分支架构，如果是Position则需提供激活变量
                 if category_name == d3d11GameType.CategoryDrawCategoryDict["Position"]:
                     if draw_ib_model.key_number != 0:
                         texture_override_vb_section.append("$active" + str(M_GlobalKeyCounter.generated_mod_number) + " = 1")
 
                 texture_override_vb_section.new_line()
             config_ini_builder.append_section(texture_override_vb_section)
-            
+
 
 
     def generate_unity_vs_config_ini(self):
-        '''
-        EFMI
-        '''
         config_ini_builder = M_IniBuilder()
         
         if self.has_cross_ib:
@@ -615,24 +829,40 @@ class ModModelEFMI:
             self.add_cross_ib_present_section(config_ini_builder)
             self.add_cross_ib_resource_id_sections(config_ini_builder)
 
-        M_IniHelper.generate_hash_style_texture_ini(ini_builder=config_ini_builder,drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
+        if not self.use_ssmt4:
+            M_IniHelper.generate_hash_style_texture_ini(ini_builder=config_ini_builder, drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
+        
         print("Length: " + str(len(self.drawib_drawibmodel_dict.items())))
 
-        for draw_ib, draw_ib_model in self.drawib_drawibmodel_dict.items():
-            print("Generating Config INI for DrawIB: " + draw_ib)
-
-            for count_i, part_name in enumerate(draw_ib_model.import_config.part_name_list):
-                component_index = count_i + 1
-                current_ib_key = f"{draw_ib}_{component_index}"
+        if self.use_ssmt4:
+            for submesh_model in self._submesh_model_list:
+                if len(submesh_model.ib) == 0:
+                    continue
+                
+                draw_ib = submesh_model.match_draw_ib
+                adapter_key = f"{draw_ib}_{submesh_model.match_index_count}"
+                draw_ib_model = self.drawib_drawibmodel_dict.get(adapter_key)
+                
+                if draw_ib_model is None:
+                    print(f"[CrossIB EFMI] 警告: 未找到 adapter_key={adapter_key}")
+                    continue
+                
+                if self.cross_ib_match_mode == 'INDEX_COUNT':
+                    current_ib_key = f"indexcount_{submesh_model.match_index_count}"
+                else:
+                    current_ib_key = f"{draw_ib}_1"
                 
                 is_source_ib = current_ib_key in self.cross_ib_info_dict
-                
-                source_ib_list_for_target = []
-                for source_ib, target_ib_list in self.cross_ib_info_dict.items():
-                    if current_ib_key in target_ib_list:
-                        source_ib_list_for_target.append(source_ib)
-                
+                source_ib_list_for_target = self.cross_ib_target_info.get(current_ib_key, [])
                 is_target_ib = len(source_ib_list_for_target) > 0
+                
+                if self.cross_ib_match_mode == 'INDEX_COUNT':
+                    current_identifier = submesh_model.match_index_count
+                else:
+                    current_identifier = draw_ib
+                
+                print(f"[CrossIB EFMI] submesh: {submesh_model.unique_str}, match_index_count={submesh_model.match_index_count}, current_ib_key={current_ib_key}")
+                print(f"[CrossIB EFMI] is_source_ib={is_source_ib}, is_target_ib={is_target_ib}, current_identifier={current_identifier}")
 
                 self.add_unity_vs_texture_override_ib_sections(
                     config_ini_builder=config_ini_builder,
@@ -641,20 +871,64 @@ class ModModelEFMI:
                     is_cross_ib_source=is_source_ib,
                     is_cross_ib_target=is_target_ib,
                     source_ib_list_for_target=source_ib_list_for_target,
-                    part_name=part_name
+                    part_name="1",
+                    match_first_index=submesh_model.match_first_index,
+                    match_index_count=int(submesh_model.match_index_count) if submesh_model.match_index_count else 0,
+                    current_identifier=current_identifier
                 )
-            
-            self.add_unity_vs_resource_vb_sections(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
-            self.add_resource_texture_sections(ini_builder=config_ini_builder,draw_ib_model=draw_ib_model)
+                
+                self.add_unity_vs_resource_vb_sections(
+                    ini_builder=config_ini_builder,
+                    draw_ib_model=draw_ib_model,
+                    unique_str=submesh_model.unique_str
+                )
+                
+                M_GlobalKeyCounter.generated_mod_number = M_GlobalKeyCounter.generated_mod_number + 1
+        else:
+            for draw_ib, draw_ib_model in self.drawib_drawibmodel_dict.items():
+                print("Generating Config INI for DrawIB: " + draw_ib)
 
-            M_IniHelper.move_slot_style_textures(draw_ib_model=draw_ib_model)
+                for count_i, part_name in enumerate(draw_ib_model.import_config.part_name_list):
+                    component_index = count_i + 1
+                    current_ib_key = f"{draw_ib}_{component_index}"
+                    
+                    is_source_ib = current_ib_key in self.cross_ib_info_dict
+                    
+                    source_ib_list_for_target = []
+                    for source_ib, target_ib_list in self.cross_ib_info_dict.items():
+                        if current_ib_key in target_ib_list:
+                            source_ib_list_for_target.append(source_ib)
+                    
+                    is_target_ib = len(source_ib_list_for_target) > 0
+                    
+                    match_first_index = draw_ib_model.import_config.match_first_index_list[draw_ib_model.import_config.part_name_list.index(part_name)]
 
-            M_GlobalKeyCounter.generated_mod_number = M_GlobalKeyCounter.generated_mod_number + 1
+                    self.add_unity_vs_texture_override_ib_sections(
+                        config_ini_builder=config_ini_builder,
+                        commandlist_ini_builder=config_ini_builder,
+                        draw_ib_model=draw_ib_model,
+                        is_cross_ib_source=is_source_ib,
+                        is_cross_ib_target=is_target_ib,
+                        source_ib_list_for_target=source_ib_list_for_target,
+                        part_name=part_name,
+                        match_first_index=match_first_index,
+                        match_index_count=0
+                    )
+                
+                self.add_unity_vs_resource_vb_sections(ini_builder=config_ini_builder, draw_ib_model=draw_ib_model)
+                self.add_resource_texture_sections(ini_builder=config_ini_builder, draw_ib_model=draw_ib_model)
+
+                M_IniHelper.move_slot_style_textures(draw_ib_model=draw_ib_model)
+
+                M_GlobalKeyCounter.generated_mod_number = M_GlobalKeyCounter.generated_mod_number + 1
 
         
-        M_IniHelper.add_branch_key_sections(ini_builder=config_ini_builder,key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
-        M_IniHelper.add_shapekey_ini_sections(ini_builder=config_ini_builder,drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
-        M_IniHelperGUI.add_branch_mod_gui_section(ini_builder=config_ini_builder,key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
+        M_IniHelper.add_branch_key_sections(ini_builder=config_ini_builder, key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
+        
+        if not self.use_ssmt4:
+            M_IniHelper.add_shapekey_ini_sections(ini_builder=config_ini_builder, drawib_drawibmodel_dict=self.drawib_drawibmodel_dict)
+        
+        M_IniHelperGUI.add_branch_mod_gui_section(ini_builder=config_ini_builder, key_name_mkey_dict=self.branch_model.keyname_mkey_dict)
 
         config_ini_builder.save_to_file(GlobalConfig.path_generate_mod_folder() + GlobalConfig.workspacename + ".ini")
 
@@ -662,9 +936,6 @@ class ModModelEFMI:
             self.copy_cross_ib_hlsl_files()
 
     def copy_cross_ib_hlsl_files(self):
-        '''
-        复制跨IB所需的HLSL文件到模组res目录
-        '''
         addon_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         source_dir = os.path.join(addon_dir, "Toolset")
         
@@ -699,9 +970,3 @@ class ModModelEFMI:
                 print(f"[CrossIB] 警告: 源文件不存在: {source_file}")
         
         print(f"[CrossIB] 共复制 {copied_count} 个HLSL文件到 {res_dir}")
-
-
-
-
-
-

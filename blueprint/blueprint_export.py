@@ -237,7 +237,8 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                 # 强兼支持
                 elif GlobalConfig.logic_name == LogicName.EFMI:
                     from ..games.efmi import ModModelEFMI
-                    migoto_mod_model = ModModelEFMI(skip_buffer_export=preview_export_only)
+                    use_ssmt4 = Properties_ImportModel.use_ssmt4()
+                    migoto_mod_model = ModModelEFMI(skip_buffer_export=preview_export_only, use_ssmt4=use_ssmt4)
                     migoto_mod_model.generate_unity_vs_config_ini()
 
                 # 终末地测试AEMI，到时候老外的EFMI发布之后，再开一套新逻辑兼容他们的，咱们用这个先测试

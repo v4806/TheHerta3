@@ -149,8 +149,28 @@ class ObjBufferHelper:
 
             return FormatUtils.convert_4x_float32_to_r8g8b8a8_unorm(result)
 
-        elif d3d11_element.Format == "R32_UINT" and (GlobalConfig.logic_name == LogicName.AEMI or GlobalConfig.logic_name == LogicName.EFMI):
-            print("终末地法线编码 - 使用 TBNCodec")
+        elif d3d11_element.Format == "R32_UINT" and GlobalConfig.logic_name == LogicName.EFMI:
+            print("终末地法线编码 - 使用 TBNCodec (完整TBN编码)")
+            raw_normals = normals.reshape(-1, 3)
+            tangents = numpy.empty(mesh_loops_length * 3, dtype=numpy.float32)
+            mesh_loops.foreach_get("tangent", tangents)
+            tangents = tangents.reshape(-1, 3)
+
+            bitangent_signs = numpy.empty(mesh_loops_length, dtype=numpy.float32)
+            mesh_loops.foreach_get("bitangent_sign", bitangent_signs)
+
+            new_normals = TBNCodec.encode_efmi_tools_r32_uint_from_tbn(
+                raw_normals,
+                tangents,
+                bitangent_signs,
+                flip_texcoord_v=True,
+                flip_bitangent_sign=True,
+            ).reshape(-1, 1)
+            
+            return new_normals
+
+        elif d3d11_element.Format == "R32_UINT" and GlobalConfig.logic_name == LogicName.AEMI:
+            print("终末地法线编码 - 使用 TBNCodec (仅法线编码)")
             raw_normals = normals.reshape(-1, 3)
             return TBNCodec.convert_normals_to_octahedral_r32_uint(raw_normals).reshape(-1, 1)
         

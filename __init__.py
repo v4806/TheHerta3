@@ -30,6 +30,13 @@ from .blueprint import blueprint_node_object_name_modify
 from .blueprint import blueprint_nest_navigate
 from .blueprint import blueprint_node_cross_ib
 
+# 第四代导出模块
+try:
+    from .common.export import draw_call_model, submesh_model, blueprint_model_v4
+    from .helper import buffer_export_helper
+except ImportError as e:
+    print(f"[TheHerta3] 第四代模块导入警告: {e}")
+
 # 自动更新功能
 from . import addon_updater_ops
 

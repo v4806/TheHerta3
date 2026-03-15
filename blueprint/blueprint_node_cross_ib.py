@@ -8,6 +8,21 @@ from .blueprint_node_base import SSMTNodeBase, SSMTSocketObject
 from ..config.main_config import GlobalConfig
 
 
+class CrossIBMatchModeEnum:
+    IB_HASH = 'IB_HASH'
+    IB_HASH_LABEL = '通过 IB Hash 识别'
+    
+    INDEX_COUNT = 'INDEX_COUNT'
+    INDEX_COUNT_LABEL = '通过 IndexCount 识别'
+    
+    @classmethod
+    def get_items(cls):
+        return [
+            (cls.IB_HASH, cls.IB_HASH_LABEL, "通过 DrawIB Hash 进行匹配"),
+            (cls.INDEX_COUNT, cls.INDEX_COUNT_LABEL, "通过 match_index_count 参数进行匹配"),
+        ]
+
+
 class CrossIBItem(PropertyGroup):
     source_ib: StringProperty(
         name="源IB",
@@ -17,6 +32,16 @@ class CrossIBItem(PropertyGroup):
     target_ib: StringProperty(
         name="目标IB",
         description="目标IB前缀，例如: a55afe59 或 a55afe59-2（表示第2个分块）",
+        default=""
+    )
+    source_index_count: StringProperty(
+        name="源IndexCount",
+        description="源 IndexCount 值，用于通过 IndexCount 识别",
+        default=""
+    )
+    target_index_count: StringProperty(
+        name="目标IndexCount",
+        description="目标 IndexCount 值，用于通过 IndexCount 识别",
         default=""
     )
     
@@ -136,6 +161,13 @@ class SSMTNode_CrossIB(SSMTNodeBase):
         update=lambda self, context: self._update_cross_ib_method()
     )
     
+    match_mode: EnumProperty(
+        name="识别模式",
+        description="选择跨 IB 的识别模式",
+        items=CrossIBMatchModeEnum.get_items(),
+        default=CrossIBMatchModeEnum.IB_HASH,
+    )
+    
     current_logic_name: StringProperty(
         name="当前运行模式",
         description="当前游戏的运行模式",
@@ -187,14 +219,29 @@ class SSMTNode_CrossIB(SSMTNodeBase):
             row = layout.row()
             row.label(text="当前运行模式不支持跨 IB", icon='ERROR')
         
+        if logic_name == "EFMI":
+            row = layout.row()
+            row.prop(self, "match_mode", text="识别模式")
+        
         box = layout.box()
-        box.label(text="跨IB映射列表 (源IB >> 目标IB)", icon='ARROW_LEFTRIGHT')
+        
+        if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+            box.label(text="跨IB映射列表 (源IB >> 目标IB)", icon='ARROW_LEFTRIGHT')
+        else:
+            box.label(text="跨IB映射列表 (源IndexCount >> 目标IndexCount)", icon='ARROW_LEFTRIGHT')
         
         for i, item in enumerate(self.cross_ib_list):
             row = box.row(align=True)
-            row.prop(item, "source_ib", text="源")
-            row.label(text=">>")
-            row.prop(item, "target_ib", text="目标")
+            
+            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+                row.prop(item, "source_ib", text="源")
+                row.label(text=">>")
+                row.prop(item, "target_ib", text="目标")
+            else:
+                row.prop(item, "source_index_count", text="源")
+                row.label(text=">>")
+                row.prop(item, "target_index_count", text="目标")
+            
             op = row.operator("ssmt.cross_ib_remove_item", text="", icon='X')
             op.node_name = self.name
             op.item_index = i
@@ -213,42 +260,72 @@ class SSMTNode_CrossIB(SSMTNodeBase):
     def get_cross_ib_mappings(self):
         mappings = []
         for item in self.cross_ib_list:
-            if item.source_ib and item.target_ib:
-                mappings.append({
-                    'source_ib': item.source_ib,
-                    'target_ib': item.target_ib
-                })
+            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+                if item.source_ib and item.target_ib:
+                    mappings.append({
+                        'source_ib': item.source_ib,
+                        'target_ib': item.target_ib,
+                        'match_mode': self.match_mode
+                    })
+            else:
+                if item.source_index_count and item.target_index_count:
+                    mappings.append({
+                        'source_index_count': item.source_index_count,
+                        'target_index_count': item.target_index_count,
+                        'match_mode': self.match_mode
+                    })
         return mappings
 
     def get_source_ib_list(self):
         source_list = []
         for item in self.cross_ib_list:
-            if item.source_ib:
-                source_list.append(item.source_ib)
+            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+                if item.source_ib:
+                    source_list.append(item.source_ib)
+            else:
+                if item.source_index_count:
+                    source_list.append(item.source_index_count)
         return list(set(source_list))
 
     def get_target_ib_list(self):
         target_list = []
         for item in self.cross_ib_list:
-            if item.target_ib:
-                target_list.append(item.target_ib)
+            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+                if item.target_ib:
+                    target_list.append(item.target_ib)
+            else:
+                if item.target_index_count:
+                    target_list.append(item.target_index_count)
         return list(set(target_list))
 
     def get_ib_mapping_dict(self):
         ib_mapping = {}
         for item in self.cross_ib_list:
-            if item.source_ib and item.target_ib:
-                source_hash, source_component = CrossIBItem.parse_ib_with_component(item.source_ib)
-                target_hash, target_component = CrossIBItem.parse_ib_with_component(item.target_ib)
-                
-                mapping_key = f"{source_hash}_{source_component}"
-                if mapping_key not in ib_mapping:
-                    ib_mapping[mapping_key] = []
-                
-                target_key = f"{target_hash}_{target_component}"
-                if target_key not in ib_mapping[mapping_key]:
-                    ib_mapping[mapping_key].append(target_key)
+            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
+                if item.source_ib and item.target_ib:
+                    source_hash, source_component = CrossIBItem.parse_ib_with_component(item.source_ib)
+                    target_hash, target_component = CrossIBItem.parse_ib_with_component(item.target_ib)
+                    
+                    mapping_key = f"{source_hash}_{source_component}"
+                    if mapping_key not in ib_mapping:
+                        ib_mapping[mapping_key] = []
+                    
+                    target_key = f"{target_hash}_{target_component}"
+                    if target_key not in ib_mapping[mapping_key]:
+                        ib_mapping[mapping_key].append(target_key)
+            else:
+                if item.source_index_count and item.target_index_count:
+                    source_key = f"indexcount_{item.source_index_count}"
+                    if source_key not in ib_mapping:
+                        ib_mapping[source_key] = []
+                    
+                    target_key = f"indexcount_{item.target_index_count}"
+                    if target_key not in ib_mapping[source_key]:
+                        ib_mapping[source_key].append(target_key)
         return ib_mapping
+
+    def get_match_mode(self):
+        return self.match_mode
 
 
 class SSMTNode_PostProcess_CrossIB(SSMTNodeBase):
