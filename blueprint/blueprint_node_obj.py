@@ -206,11 +206,26 @@ class SSMTNode_Object_Info(SSMTNodeBase):
     def update_object_name(self, context):
         if self.object_name:
             self.label = self.object_name
-            if "-" in self.object_name:
+            
+            if "." in self.object_name:
+                obj_name_total_split = self.object_name.split(".")
+                obj_name_split = obj_name_total_split[0].split("-")
+                
+                if len(obj_name_split) >= 3:
+                    self.draw_ib = obj_name_split[0]
+                    self.index_count = obj_name_split[1]
+                    self.first_index = obj_name_split[2]
+                    self.component = obj_name_split[1]
+                
+                if len(obj_name_total_split) >= 2:
+                    self.alias_name = ".".join(obj_name_total_split[1:])
+            elif "-" in self.object_name:
                 obj_name_split = self.object_name.split("-")
                 self.draw_ib = obj_name_split[0]
-                self.component = obj_name_split[1]
-                self.alias_name = obj_name_split[2]
+                if len(obj_name_split) >= 2:
+                    self.component = obj_name_split[1]
+                if len(obj_name_split) >= 3:
+                    self.alias_name = obj_name_split[2]
             
             obj = bpy.data.objects.get(self.object_name)
             if obj:
@@ -219,15 +234,16 @@ class SSMTNode_Object_Info(SSMTNodeBase):
             self.label = "Object Info"
             self.object_id = ""
         
-        self.update_node_width([self.object_name, self.draw_ib, self.component, self.alias_name])
+        self.update_node_width([self.object_name, self.draw_ib, self.component, self.index_count, self.first_index, self.alias_name])
     object_name: bpy.props.StringProperty(name="Object Name", default="", update=update_object_name)
     object_id: bpy.props.StringProperty(name="Object ID", default="")
     original_object_name: bpy.props.StringProperty(name="Original Object Name", default="")
 
-
-    draw_ib: bpy.props.StringProperty(name="DrawIB", default="") # type: ignore
-    component: bpy.props.StringProperty(name="Component", default="") # type: ignore
-    alias_name: bpy.props.StringProperty(name="Alias Name", default="") # type: ignore
+    draw_ib: bpy.props.StringProperty(name="DrawIB", default="")
+    component: bpy.props.StringProperty(name="Component", default="")
+    index_count: bpy.props.StringProperty(name="IndexCount", default="")
+    first_index: bpy.props.StringProperty(name="FirstIndex", default="")
+    alias_name: bpy.props.StringProperty(name="Alias Name", default="")
 
     def init(self, context):
         self.outputs.new('SSMTSocketObject', "Object")
@@ -244,9 +260,16 @@ class SSMTNode_Object_Info(SSMTNodeBase):
             op = row.operator("ssmt.select_node_object", text="", icon='RESTRICT_SELECT_OFF')
             op.object_name = self.object_name
 
-        layout.prop(self, "draw_ib", text="DrawIB")
-        layout.prop(self, "component", text="Component")
-        layout.prop(self, "alias_name", text="Alias Name")
+        from ..config.main_config import GlobalConfig, LogicName
+        if GlobalConfig.logic_name == LogicName.EFMI:
+            layout.label(text=f"DrawIB: {self.draw_ib}")
+            layout.label(text=f"IndexCount: {self.index_count}")
+            layout.label(text=f"FirstIndex: {self.first_index}")
+            layout.prop(self, "alias_name", text="Alias Name")
+        else:
+            layout.prop(self, "draw_ib", text="DrawIB")
+            layout.prop(self, "component", text="Component")
+            layout.prop(self, "alias_name", text="Alias Name")
 
 
 class SSMTNode_Object_Group(SSMTNodeBase):
