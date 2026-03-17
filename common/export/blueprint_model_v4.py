@@ -18,6 +18,7 @@ class BluePrintModel_V4:
         self.cross_ib_target_info: dict = {}
         self.cross_ib_source_to_target_dict: dict = {}
         self.cross_ib_match_mode: str = 'IB_HASH'
+        self.cross_ib_mapping_objects: dict = {}
 
     def _get_m_key_class(self):
         from ...base.m_key import M_Key
@@ -186,7 +187,18 @@ class BluePrintModel_V4:
             connected_objects = self._collect_cross_ib_objects(unknown_node)
             for obj_info in connected_objects:
                 if obj_info.get('is_cross_ib_source', False):
-                    self.cross_ib_object_names.add(obj_info['object_name'])
+                    obj_name = obj_info['object_name']
+                    self.cross_ib_object_names.add(obj_name)
+                    
+                    source_ib_key = obj_info.get('source_ib_key', '')
+                    target_ib_keys = obj_info.get('target_ib_keys', [])
+                    
+                    if source_ib_key:
+                        for target_ib_key in target_ib_keys:
+                            mapping_key = (source_ib_key, target_ib_key)
+                            if mapping_key not in self.cross_ib_mapping_objects:
+                                self.cross_ib_mapping_objects[mapping_key] = set()
+                            self.cross_ib_mapping_objects[mapping_key].add(obj_name)
             
             self.parse_current_node(unknown_node, chain_key_list)
 
@@ -223,18 +235,33 @@ class BluePrintModel_V4:
         
         match_mode = getattr(cross_ib_node, 'get_match_mode', lambda: 'IB_HASH')()
         
-        source_identifiers = set()
+        source_to_targets_map = {}
         if match_mode == 'INDEX_COUNT':
             for item in cross_ib_node.cross_ib_list:
                 if item.source_index_count:
-                    source_identifiers.add(item.source_index_count)
-            print(f"[CrossIB V4] INDEX_COUNT 模式，源标识符: {source_identifiers}")
+                    source_key = f"indexcount_{item.source_index_count}"
+                    if source_key not in source_to_targets_map:
+                        source_to_targets_map[source_key] = []
+                    if item.target_index_count:
+                        target_key = f"indexcount_{item.target_index_count}"
+                        if target_key not in source_to_targets_map[source_key]:
+                            source_to_targets_map[source_key].append(target_key)
+            print(f"[CrossIB V4] INDEX_COUNT 模式，映射关系: {source_to_targets_map}")
         else:
             for item in cross_ib_node.cross_ib_list:
                 if item.source_ib:
-                    ib_hash, component = self._parse_ib_with_component(item.source_ib)
-                    source_identifiers.add(ib_hash)
-            print(f"[CrossIB V4] IB_HASH 模式，源标识符: {source_identifiers}")
+                    source_hash, source_component = self._parse_ib_with_component(item.source_ib)
+                    source_key = f"{source_hash}_{source_component}"
+                    if source_key not in source_to_targets_map:
+                        source_to_targets_map[source_key] = []
+                    if item.target_ib:
+                        target_hash, target_component = self._parse_ib_with_component(item.target_ib)
+                        target_key = f"{target_hash}_{target_component}"
+                        if target_key not in source_to_targets_map[source_key]:
+                            source_to_targets_map[source_key].append(target_key)
+            print(f"[CrossIB V4] IB_HASH 模式，映射关系: {source_to_targets_map}")
+        
+        source_identifiers = set(source_to_targets_map.keys())
         
         PASS_THROUGH_NODES = {
             "SSMTNode_Object_Group",
@@ -257,7 +284,10 @@ class BluePrintModel_V4:
             if node.bl_idname == "SSMTNode_Object_Info":
                 obj_name = getattr(node, 'object_name', '')
                 if obj_name:
+                    source_ib_key = ''
+                    target_ib_keys = []
                     is_match = False
+                    
                     if match_mode == 'INDEX_COUNT':
                         index_count = getattr(node, 'index_count', '')
                         if not index_count and "-" in obj_name:
@@ -267,22 +297,29 @@ class BluePrintModel_V4:
                                 if "." in index_count:
                                     index_count = index_count.split(".")[0]
                         print(f"[CrossIB V4] 检查节点 {node.name}, obj_name={obj_name}, index_count={index_count}, source_identifiers={source_identifiers}")
-                        if index_count in source_identifiers:
+                        source_ib_key = f"indexcount_{index_count}"
+                        if source_ib_key in source_identifiers:
                             is_match = True
-                            print(f"[CrossIB V4] 匹配成功: {obj_name} (index_count={index_count})")
+                            target_ib_keys = source_to_targets_map[source_ib_key].copy()
+                            print(f"[CrossIB V4] 匹配成功: {obj_name} (index_count={index_count}), targets={target_ib_keys}")
                     else:
                         draw_ib = getattr(node, 'draw_ib', '')
                         if not draw_ib and "-" in obj_name:
                             draw_ib = obj_name.split("-")[0]
-                        if draw_ib in source_identifiers:
+                        component = getattr(node, 'component', 1) or 1
+                        source_ib_key = f"{draw_ib}_{component}"
+                        if source_ib_key in source_identifiers:
                             is_match = True
+                            target_ib_keys = source_to_targets_map[source_ib_key].copy()
                     
                     connected_objects.append({
                         'node': node,
                         'object_name': obj_name,
                         'draw_ib': getattr(node, 'draw_ib', '') or (obj_name.split("-")[0] if "-" in obj_name else ''),
-                        'index_count': index_count,
-                        'is_cross_ib_source': is_match
+                        'index_count': index_count if match_mode == 'INDEX_COUNT' else '',
+                        'is_cross_ib_source': is_match,
+                        'source_ib_key': source_ib_key,
+                        'target_ib_keys': target_ib_keys
                     })
             
             elif node.bl_idname == "SSMTNode_MultiFile_Export":
@@ -290,6 +327,8 @@ class BluePrintModel_V4:
                     for item in node.object_list:
                         obj_name = getattr(item, 'object_name', '')
                         if obj_name:
+                            source_ib_key = ''
+                            target_ib_keys = []
                             is_match = False
                             index_count = ''
                             draw_ib = ''
@@ -302,21 +341,28 @@ class BluePrintModel_V4:
                                         index_count = obj_name_split[1]
                                         if "." in index_count:
                                             index_count = index_count.split(".")[0]
-                                if index_count in source_identifiers:
+                                source_ib_key = f"indexcount_{index_count}"
+                                if source_ib_key in source_identifiers:
                                     is_match = True
+                                    target_ib_keys = source_to_targets_map[source_ib_key].copy()
                             else:
                                 draw_ib = getattr(item, 'draw_ib', '')
                                 if not draw_ib and "-" in obj_name:
                                     draw_ib = obj_name.split("-")[0]
-                                if draw_ib in source_identifiers:
+                                component = getattr(item, 'component', 1) or 1
+                                source_ib_key = f"{draw_ib}_{component}"
+                                if source_ib_key in source_identifiers:
                                     is_match = True
+                                    target_ib_keys = source_to_targets_map[source_ib_key].copy()
                             
                             connected_objects.append({
                                 'node': node,
                                 'object_name': obj_name,
                                 'draw_ib': draw_ib or (obj_name.split("-")[0] if "-" in obj_name else ''),
                                 'index_count': index_count,
-                                'is_cross_ib_source': is_match
+                                'is_cross_ib_source': is_match,
+                                'source_ib_key': source_ib_key,
+                                'target_ib_keys': target_ib_keys
                             })
             
             elif node.bl_idname == "SSMTNode_Blueprint_Nest":

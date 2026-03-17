@@ -103,6 +103,7 @@ class ModModelEFMI:
         self.cross_ib_info_dict = self.branch_model.cross_ib_info_dict
         self.cross_ib_method_dict = getattr(self.branch_model, 'cross_ib_method_dict', {})
         self.has_cross_ib = len(self.cross_ib_info_dict) > 0
+        self.cross_ib_mapping_objects = getattr(self.branch_model, 'cross_ib_mapping_objects', {})
         
         if use_ssmt4:
             self.cross_ib_target_info = getattr(self.branch_model, 'cross_ib_target_info', {})
@@ -111,6 +112,7 @@ class ModModelEFMI:
             print(f"[CrossIB EFMI] cross_ib_info_dict={self.cross_ib_info_dict}")
             print(f"[CrossIB EFMI] cross_ib_target_info={self.cross_ib_target_info}")
             print(f"[CrossIB EFMI] cross_ib_object_names={self.branch_model.cross_ib_object_names}")
+            print(f"[CrossIB EFMI] cross_ib_mapping_objects={self.cross_ib_mapping_objects}")
         else:
             self.cross_ib_target_info = {}
             self.cross_ib_match_mode = 'IB_HASH'
@@ -326,22 +328,41 @@ class ModModelEFMI:
         
         return cross_ib_objects
 
-    def _split_objects_by_cross_ib(self, obj_model_list):
+    def _split_objects_by_cross_ib(self, obj_model_list, source_ib_key=None, target_ib_key=None):
         cross_ib_objects = []
         non_cross_ib_objects = []
         
         cross_ib_object_names = self.branch_model.cross_ib_object_names
+        cross_ib_mapping_objects = self.cross_ib_mapping_objects
         
-        for obj_model in obj_model_list:
-            obj_name = obj_model.obj_name if hasattr(obj_model, 'obj_name') else getattr(obj_model, 'obj_name', '')
-            if obj_name in cross_ib_object_names:
-                cross_ib_objects.append(obj_model)
+        if source_ib_key:
+            specific_cross_ib_objects = set()
+            
+            if target_ib_key:
+                mapping_key = (source_ib_key, target_ib_key)
+                specific_cross_ib_objects = cross_ib_mapping_objects.get(mapping_key, set())
             else:
-                non_cross_ib_objects.append(obj_model)
+                for (src_key, tgt_key), obj_names in cross_ib_mapping_objects.items():
+                    if src_key == source_ib_key:
+                        specific_cross_ib_objects.update(obj_names)
+            
+            for obj_model in obj_model_list:
+                obj_name = obj_model.obj_name if hasattr(obj_model, 'obj_name') else getattr(obj_model, 'obj_name', '')
+                if obj_name in specific_cross_ib_objects:
+                    cross_ib_objects.append(obj_model)
+                else:
+                    non_cross_ib_objects.append(obj_model)
+        else:
+            for obj_model in obj_model_list:
+                obj_name = obj_model.obj_name if hasattr(obj_model, 'obj_name') else getattr(obj_model, 'obj_name', '')
+                if obj_name in cross_ib_object_names:
+                    cross_ib_objects.append(obj_model)
+                else:
+                    non_cross_ib_objects.append(obj_model)
         
         return cross_ib_objects, non_cross_ib_objects
 
-    def generate_cross_ib_block_for_source(self, source_identifier, component_model):
+    def generate_cross_ib_block_for_source(self, source_identifier, component_model, source_ib_key=None):
         lines = []
         lines.append(";跨 iB 区域")
         lines.append("if vs == 200 || vs == 201")
@@ -354,7 +375,8 @@ class ModModelEFMI:
         lines.append(";所有需要跨 Ib 的物体引用")
         
         cross_ib_objects, non_cross_ib_objects = self._split_objects_by_cross_ib(
-            component_model.final_ordered_draw_obj_model_list
+            component_model.final_ordered_draw_obj_model_list,
+            source_ib_key=source_ib_key
         )
         
         if cross_ib_objects:
@@ -553,8 +575,167 @@ class ModModelEFMI:
         if component_model is None:
             component_model = draw_ib_model.component_name_component_model_dict.get("Component 1")
 
-        if is_cross_ib_source and self.has_cross_ib:
-            cross_ib_lines = self.generate_cross_ib_block_for_source(current_identifier, component_model)
+        if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+            current_ib_key = f"indexcount_{current_identifier}" if str(current_identifier).isdigit() else current_identifier
+        else:
+            current_ib_key = f"{current_identifier}_1"
+        
+        is_both_source_and_target = is_cross_ib_source and is_cross_ib_target and self.has_cross_ib
+        
+        if is_both_source_and_target:
+            cross_ib_objects_from_source = []
+            cross_ib_objects_from_other_sources = []
+            
+            if is_cross_ib_source:
+                cross_objs, _ = self._split_objects_by_cross_ib(
+                    component_model.final_ordered_draw_obj_model_list,
+                    source_ib_key=current_ib_key
+                )
+                cross_ib_objects_from_source = cross_objs
+            
+            if is_cross_ib_target and source_ib_list_for_target:
+                for source_ib in source_ib_list_for_target:
+                    if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+                        source_identifier = source_ib.replace('indexcount_', '') if source_ib.startswith('indexcount_') else source_ib.split("_")[0]
+                        source_adapter_key = None
+                        for key, adapter in self.drawib_drawibmodel_dict.items():
+                            if key.endswith(f"_{source_identifier}"):
+                                source_adapter_key = key
+                                source_ib_model = adapter
+                                break
+                        if source_adapter_key is None:
+                            continue
+                    else:
+                        source_hash, source_component_index = source_ib.split("_")
+                        source_component_index = int(source_component_index)
+                        source_identifier = source_hash
+                        source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                    
+                    source_component_model = None
+                    if source_ib_model:
+                        src_component_name = "Component 1" if self.use_ssmt4 else f"Component {source_component_index}"
+                        source_component_model = source_ib_model.component_name_component_model_dict.get(src_component_name)
+                    
+                    if source_component_model:
+                        cross_objs, _ = self._split_objects_by_cross_ib(
+                            source_component_model.final_ordered_draw_obj_model_list,
+                            source_ib_key=source_ib,
+                            target_ib_key=current_ib_key
+                        )
+                        cross_ib_objects_from_other_sources.extend(cross_objs)
+            
+            texture_override_ib_section.append(self.vlr_filter_index_indent + ";跨 iB 区域(当前块身份绘制,所有需要跨 Ib 的物体引用)")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "if vs == 200 || vs == 201")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_ExtractCB1")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{current_identifier}")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RecordBones")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "    vs-t0 = ResourceFakeT0_SRV")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "    vs-cb1 = ResourceFakeCB1")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + ";当前块作为源,需要跨到其他 IB 的物体引用")
+            
+            if cross_ib_objects_from_source:
+                drawindexed_str_list = self._get_drawindexed_str_list(cross_ib_objects_from_source)
+                for drawindexed_str in drawindexed_str_list:
+                    if drawindexed_str.strip():
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
+            
+            texture_override_ib_section.append(self.vlr_filter_index_indent + ";其他源块跨到当前块的物体引用")
+            
+            if cross_ib_objects_from_other_sources:
+                drawindexed_str_list = self._get_drawindexed_str_list(cross_ib_objects_from_other_sources)
+                for drawindexed_str in drawindexed_str_list:
+                    if drawindexed_str.strip():
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
+            
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "endif")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + ";当前块身份,绘制当前块本身拥有的物体")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + f"cs-t2 = ResourceID_{current_identifier}")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "run = CustomShader_RedirectCB1")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "vs-t0 = ResourceFakeT0_SRV")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "vs-cb1 = ResourceFakeCB1")
+            
+            all_target_objects = component_model.final_ordered_draw_obj_model_list if component_model else []
+            non_cross_ib_objects = [obj for obj in all_target_objects if obj not in cross_ib_objects_from_source]
+            if non_cross_ib_objects:
+                drawindexed_str_list = self._get_drawindexed_str_list(non_cross_ib_objects)
+                for drawindexed_str in drawindexed_str_list:
+                    if drawindexed_str.strip():
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
+            
+            if is_cross_ib_target and source_ib_list_for_target:
+                for source_ib in source_ib_list_for_target:
+                    if self.use_ssmt4 and self.cross_ib_match_mode == 'INDEX_COUNT':
+                        source_identifier = source_ib.replace('indexcount_', '') if source_ib.startswith('indexcount_') else source_ib.split("_")[0]
+                        source_adapter_key = None
+                        source_ib_model = None
+                        for key, adapter in self.drawib_drawibmodel_dict.items():
+                            if key.endswith(f"_{source_identifier}"):
+                                source_adapter_key = key
+                                source_ib_model = adapter
+                                break
+                        if source_adapter_key is None:
+                            continue
+                        source_hash = source_adapter_key.split("_")[0]
+                    else:
+                        source_hash, source_component_index = source_ib.split("_")
+                        source_component_index = int(source_component_index)
+                        source_identifier = source_hash
+                        source_ib_model = self.drawib_drawibmodel_dict.get(source_hash)
+                    
+                    source_component_model = None
+                    if source_ib_model:
+                        src_component_name = "Component 1" if self.use_ssmt4 else f"Component {source_component_index}"
+                        source_component_model = source_ib_model.component_name_component_model_dict.get(src_component_name)
+                    
+                    cross_objs, _ = self._split_objects_by_cross_ib(
+                        source_component_model.final_ordered_draw_obj_model_list if source_component_model else [],
+                        source_ib_key=source_ib,
+                        target_ib_key=current_ib_key
+                    )
+                    
+                    if not cross_objs:
+                        continue
+                    
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f";跨 IB 身份块,绘制 {source_identifier} 需要跨 Ib 的物体引用")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "if vs == 202 || vs == 203")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{source_identifier}")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "    ;跨 IB 块数据区域")
+                    
+                    if self.use_ssmt4 and source_ib_model:
+                        source_unique_str = source_ib_model.unique_str
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb0 = Resource_{source_unique_str.replace('-', '_')}_Position")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb1 = Resource_{source_unique_str.replace('-', '_')}_Texcoord")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb2 = Resource_{source_unique_str.replace('-', '_')}_Blend")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb3 = Resource_{source_unique_str.replace('-', '_')}_Position")
+                    else:
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb0 = Resource{source_hash}Position")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb1 = Resource{source_hash}Texcoord")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb2 = Resource{source_hash}Blend")
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + f"    vb3 = Resource{source_hash}Position")
+                    
+                    if source_ib_model:
+                        src_ib_resource_name = source_ib_model.PartName_IBResourceName_Dict.get("1")
+                        if src_ib_resource_name:
+                            texture_override_ib_section.append(self.vlr_filter_index_indent + f"    ib = {src_ib_resource_name}")
+                    
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + ";所有需要跨 Ib 的物体引用")
+                    
+                    drawindexed_str_list = self._get_drawindexed_str_list(cross_objs)
+                    for drawindexed_str in drawindexed_str_list:
+                        if drawindexed_str.strip():
+                            texture_override_ib_section.append(self.vlr_filter_index_indent + drawindexed_str)
+                    
+                    texture_override_ib_section.append(self.vlr_filter_index_indent + "endif")
+            
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "post vs-cb1 = null")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "post vs-t0 = null")
+            texture_override_ib_section.append(self.vlr_filter_index_indent + "post cs-t2 = null")
+        
+        elif is_cross_ib_source and self.has_cross_ib:
+            cross_ib_lines = self.generate_cross_ib_block_for_source(current_identifier, component_model, source_ib_key=current_ib_key)
             for line in cross_ib_lines:
                 texture_override_ib_section.append(self.vlr_filter_index_indent + line)
         
@@ -585,7 +766,9 @@ class ModModelEFMI:
                 
                 if source_component_model:
                     cross_objs, _ = self._split_objects_by_cross_ib(
-                        source_component_model.final_ordered_draw_obj_model_list
+                        source_component_model.final_ordered_draw_obj_model_list,
+                        source_ib_key=source_ib,
+                        target_ib_key=current_ib_key
                     )
                     all_cross_ib_objects.extend(cross_objs)
             
@@ -644,7 +827,9 @@ class ModModelEFMI:
                     source_component_model = source_ib_model.component_name_component_model_dict.get(src_component_name)
                 
                 cross_objs, _ = self._split_objects_by_cross_ib(
-                    source_component_model.final_ordered_draw_obj_model_list if source_component_model else []
+                    source_component_model.final_ordered_draw_obj_model_list if source_component_model else [],
+                    source_ib_key=source_ib,
+                    target_ib_key=current_ib_key
                 )
                 
                 if not cross_objs:
