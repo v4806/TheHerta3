@@ -190,6 +190,9 @@ class ModModelZZMI:
 
         texture_override_vb_section = M_IniSection(M_SectionType.TextureOverrideVB)
         texture_override_vb_section.append("; " + draw_ib)
+        
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
+        
         for category_name in d3d11GameType.OrderedCategoryNameList:
             category_hash = draw_ib_model.import_config.category_hash_dict[category_name]
             category_slot = d3d11GameType.CategoryExtractSlotDict[category_name]
@@ -211,7 +214,11 @@ class ModModelZZMI:
             for original_category_name, draw_category_name in d3d11GameType.CategoryDrawCategoryDict.items():
                 if category_name == draw_category_name:
                     category_original_slot = d3d11GameType.CategoryExtractSlotDict[original_category_name]
-                    texture_override_vb_section.append(filterindex_indent_prefix + drawtype_indent_prefix + category_original_slot + " = Resource" + draw_ib + original_category_name)
+                    if unique_str:
+                        resource_name = "Resource_" + unique_str.replace("-", "_") + "_" + original_category_name
+                    else:
+                        resource_name = "Resource" + draw_ib + original_category_name
+                    texture_override_vb_section.append(filterindex_indent_prefix + drawtype_indent_prefix + category_original_slot + " = " + resource_name)
 
             # draw一般都是在Blend槽位上进行的，所以我们这里要判断确定是Blend要替换的hash才能进行draw。
             draw_category_name = d3d11GameType.CategoryDrawCategoryDict.get("Blend",None)
@@ -571,12 +578,20 @@ class ModModelZZMI:
         resource_buffer_section = M_IniSection(M_SectionType.ResourceBuffer)
         
         buffer_folder_name = GlobalConfig.get_buffer_folder_name()
+        
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
 
         for category_name in draw_ib_model.d3d11GameType.OrderedCategoryNameList:
-            resource_buffer_section.append("[Resource" + draw_ib_model.draw_ib + category_name + "]")
+            if unique_str:
+                resource_name = "Resource_" + unique_str.replace("-", "_") + "_" + category_name
+                buf_filename = unique_str + "-" + category_name + ".buf"
+            else:
+                resource_name = "Resource" + draw_ib_model.draw_ib + category_name
+                buf_filename = draw_ib_model.draw_ib + "-" + category_name + ".buf"
+            resource_buffer_section.append("[" + resource_name + "]")
             resource_buffer_section.append("type = Buffer")
             resource_buffer_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
-            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
+            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buf_filename)
             resource_buffer_section.new_line()
         
         for partname, ib_filename in draw_ib_model.PartName_IBBufferFileName_Dict.items():

@@ -1,5 +1,6 @@
 import bpy
 import math
+import os
 
 
 from ..config.import_config import GlobalConfig
@@ -13,6 +14,94 @@ from ..config.properties_generate_mod import Properties_GenerateMod
 from ..common.m_ini_helper import M_IniHelper,M_IniHelper
 from ..common.m_ini_helper_gui import M_IniHelperGUI
 from ..config.properties_wwmi import Properties_WWMI
+from ..utils.json_utils import JsonUtils
+from ..utils.config_utils import ConfigUtils
+
+
+def check_and_try_generate_import_json_for_ssmt4() -> dict:
+    '''
+    检查 Import.json 是否存在，如果不存在则尝试自动生成
+    返回 draw_ib_gametypename_dict
+    '''
+    workspace_import_json_path = os.path.join(GlobalConfig.path_workspace_folder(), "Import.json")
+    
+    if os.path.exists(workspace_import_json_path):
+        return JsonUtils.LoadFromFile(workspace_import_json_path)
+    
+    print("Import.json 不存在，尝试自动生成...")
+    
+    draw_ib_gametypename_dict = {}
+    
+    current_workspace_folder = GlobalConfig.path_workspace_folder()
+    
+    try:
+        all_folders = [f.name for f in os.scandir(current_workspace_folder) if f.is_dir()]
+    except Exception as e:
+        return draw_ib_gametypename_dict
+    
+    for folder_name in all_folders:
+        folder_path = os.path.join(current_workspace_folder, folder_name)
+        
+        has_type_folder = False
+        try:
+            subdirs = os.listdir(folder_path)
+            for subdir in subdirs:
+                if subdir.startswith("TYPE_"):
+                    has_type_folder = True
+                    break
+        except:
+            pass
+        
+        if not has_type_folder:
+            continue
+        
+        if "-" in folder_name:
+            draw_ib_key = folder_name
+        else:
+            draw_ib_key = folder_name
+        
+        dirs = os.listdir(folder_path)
+        gpu_folders = []
+        cpu_folders = []
+        
+        for dirname in dirs:
+            if not dirname.startswith("TYPE_"):
+                continue
+            type_folder_path = os.path.join(folder_path, dirname)
+            if dirname.startswith("TYPE_GPU"):
+                gpu_folders.append(type_folder_path)
+            elif dirname.startswith("TYPE_CPU"):
+                cpu_folders.append(type_folder_path)
+        
+        all_type_folders = gpu_folders + cpu_folders
+        
+        for type_folder_path in all_type_folders:
+            import_json_path = os.path.join(type_folder_path, "import.json")
+            if os.path.exists(import_json_path):
+                try:
+                    import_json = JsonUtils.LoadFromFile(import_json_path)
+                    work_game_type = import_json.get("WorkGameType", "")
+                    if work_game_type:
+                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
+                        break
+                except Exception:
+                    continue
+            
+            tmp_json_path = os.path.join(type_folder_path, "tmp.json")
+            if os.path.exists(tmp_json_path):
+                try:
+                    tmp_json = ConfigUtils.read_tmp_json(type_folder_path)
+                    work_game_type = tmp_json.get("WorkGameType", "")
+                    if work_game_type:
+                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
+                        break
+                except Exception:
+                    continue
+    
+    if draw_ib_gametypename_dict:
+        JsonUtils.SaveToFile(json_dict=draw_ib_gametypename_dict, filepath=workspace_import_json_path)
+    
+    return draw_ib_gametypename_dict
 
 
 class ModModelWWMI:
@@ -24,15 +113,59 @@ class ModModelWWMI:
         self.drawib_drawibmodel_dict:dict[str,DrawIBModelWWMI] = {}
         self.parse_draw_ib_draw_ib_model_dict()
 
+    def _find_ssmt4_unique_str(self, draw_ib: str, draw_ib_gametypename_dict: dict) -> str:
+        '''
+        查找 SSMT4 格式的 unique_str
+        
+        第三代格式（SSMT3）：文件夹结构为 DrawIB/TYPE_xxx/
+        第四代格式（SSMT4）：文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
+        
+        通过检查工作空间中是否存在以 draw_ib 开头的 SSMT4 格式文件夹来判断
+        '''
+        workspace_folder = GlobalConfig.path_workspace_folder()
+        
+        if draw_ib in draw_ib_gametypename_dict:
+            return ""
+        
+        try:
+            all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
+            ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib + "-")]
+            
+            if ssmt4_folders:
+                for folder_name in ssmt4_folders:
+                    if folder_name in draw_ib_gametypename_dict:
+                        return folder_name
+                    
+                    folder_path = os.path.join(workspace_folder, folder_name)
+                    try:
+                        subdirs = os.listdir(folder_path)
+                        for subdir in subdirs:
+                            if subdir.startswith("TYPE_"):
+                                return folder_name
+                    except:
+                        continue
+        except Exception as e:
+            print(f"查找 SSMT4 文件夹时出错: {e}")
+        
+        return ""
 
     def parse_draw_ib_draw_ib_model_dict(self):
         '''
         根据obj的命名规则，推导出DrawIB并抽象为DrawIBModel
-        如果用户用不到某个DrawIB的话，就可以隐藏掉对应的obj
-        隐藏掉的obj就不会被统计生成DrawIBModel，做到只导入模型，不生成Mod的效果。
+        支持第三代(SSMT3)和第四代(SSMT4)格式
+        
+        第三代格式：物体名称为 DrawIB-Component.Alias，文件夹结构为 DrawIB/TYPE_xxx/
+        第四代格式：物体名称为 DrawIB-IndexCount-FirstIndex.Alias，文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
         '''
+        draw_ib_gametypename_dict = check_and_try_generate_import_json_for_ssmt4()
+        
         for draw_ib in self.branch_model.draw_ib__component_count_list__dict.keys():
-            draw_ib_model = DrawIBModelWWMI(draw_ib=draw_ib,branch_model=self.branch_model)
+            unique_str = self._find_ssmt4_unique_str(draw_ib, draw_ib_gametypename_dict)
+            
+            if unique_str:
+                print(f"检测到 SSMT4 格式: draw_ib={draw_ib}, unique_str={unique_str}")
+            
+            draw_ib_model = DrawIBModelWWMI(draw_ib=draw_ib, branch_model=self.branch_model, unique_str=unique_str)
             self.drawib_drawibmodel_dict[draw_ib] = draw_ib_model
 
     def add_constants_section(self,ini_builder:M_IniBuilder,draw_ib_model:DrawIBModelWWMI):
@@ -622,13 +755,16 @@ class ModModelWWMI:
         resource_buffer_section = M_IniSection(M_SectionType.ResourceBuffer)
         
         buffer_folder_name = GlobalConfig.get_buffer_folder_name()
+        
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
+        buffer_prefix = unique_str if unique_str else draw_ib_model.draw_ib
 
         # IndexBuffer
         resource_buffer_section.append("[ResourceIndexBuffer]")
         resource_buffer_section.append("type = Buffer")
         resource_buffer_section.append("format = DXGI_FORMAT_R32_UINT")
         resource_buffer_section.append("stride = 12")
-        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "Component1.buf")
+        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "Component1.buf")
         resource_buffer_section.new_line()
 
         # CategoryBuffer
@@ -649,7 +785,7 @@ class ModModelWWMI:
                 resource_buffer_section.append("format = DXGI_FORMAT_R16G16_FLOAT")
             
             resource_buffer_section.append("stride = " + str(category_stride))
-            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
+            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + category_name + ".buf")
             resource_buffer_section.new_line()
 
             if category_name == "Blend" and draw_ib_model.blend_remap:
@@ -658,7 +794,7 @@ class ModModelWWMI:
                 resource_buffer_section.append("type = Buffer")
                 resource_buffer_section.append("format = DXGI_FORMAT_R8_UINT")
                 # resource_buffer_section.append("stride = 1")
-                resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
+                resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + category_name + ".buf")
                 resource_buffer_section.new_line()
         
         # print("BLENDREMAP: " + str(draw_ib_model.blend_remap))
@@ -668,19 +804,19 @@ class ModModelWWMI:
             resource_buffer_section.append("[ResourceBlendRemapVertexVGBuffer]")
             resource_buffer_section.append("type = Buffer")
             resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
-            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "BlendRemapVertexVG.buf")
+            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "BlendRemapVertexVG.buf")
             resource_buffer_section.new_line()
 
             resource_buffer_section.append("[ResourceBlendRemapForwardBuffer]")
             resource_buffer_section.append("type = Buffer")
             resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
-            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "BlendRemapForward.buf")
+            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "BlendRemapForward.buf")
             resource_buffer_section.new_line()
 
             resource_buffer_section.append("[ResourceBlendRemapReverseBuffer]")
             resource_buffer_section.append("type = Buffer")
             resource_buffer_section.append("format = DXGI_FORMAT_R16_UINT")
-            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "BlendRemapReverse.buf")
+            resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "BlendRemapReverse.buf")
             resource_buffer_section.new_line()
 
 
@@ -689,21 +825,21 @@ class ModModelWWMI:
         resource_buffer_section.append("type = Buffer")
         resource_buffer_section.append("format = DXGI_FORMAT_R32G32B32A32_UINT")
         resource_buffer_section.append("stride = 16")
-        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "ShapeKeyOffset.buf")
+        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "ShapeKeyOffset.buf")
         resource_buffer_section.new_line()
 
         resource_buffer_section.append("[ResourceShapeKeyVertexIdBuffer]")
         resource_buffer_section.append("type = Buffer")
         resource_buffer_section.append("format = DXGI_FORMAT_R32_UINT")
         resource_buffer_section.append("stride = 4")
-        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "ShapeKeyVertexId.buf")
+        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "ShapeKeyVertexId.buf")
         resource_buffer_section.new_line()
 
         resource_buffer_section.append("[ResourceShapeKeyVertexOffsetBuffer]")
         resource_buffer_section.append("type = Buffer")
         resource_buffer_section.append("format = DXGI_FORMAT_R16_FLOAT")
         resource_buffer_section.append("stride = 2")
-        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + "ShapeKeyVertexOffset.buf")
+        resource_buffer_section.append("filename = " + buffer_folder_name + "/" + buffer_prefix + "-" + "ShapeKeyVertexOffset.buf")
         resource_buffer_section.new_line()
 
         ini_builder.append_section(resource_buffer_section)

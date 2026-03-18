@@ -44,6 +44,7 @@ class DrawIBModelWWMI:
     '''
     draw_ib: str
     branch_model: BluePrintModel
+    unique_str: str = ""
 
     draw_ib_alias: str = field(init=False)
     # ImportConfig 需要传入 draw_ib 参数，因此不要在这里用 default_factory 自动实例化
@@ -79,11 +80,16 @@ class DrawIBModelWWMI:
         draw_ib_alias_name_dict = ConfigUtils.get_draw_ib_alias_name_dict()
         self.draw_ib_alias = draw_ib_alias_name_dict.get(self.draw_ib,self.draw_ib)
         # (2) 读取工作空间中配置文件的配置项
-        self.import_config = ImportConfig(draw_ib=self.draw_ib)
+        self.import_config = ImportConfig(draw_ib=self.draw_ib, unique_str=self.unique_str)
         self.d3d11GameType:D3D11GameType = self.import_config.d3d11GameType
         
         # 读取WWMI专属配置
-        self.extracted_object:ExtractedObject = ExtractedObjectHelper.read_metadata(GlobalConfig.path_extract_gametype_folder(draw_ib=self.draw_ib,gametype_name=self.d3d11GameType.GameTypeName)  + "Metadata.json")
+        # 优先使用 SSMT4 格式的路径，如果 unique_str 为空则回退到 SSMT3 格式
+        if self.unique_str:
+            metadata_path = os.path.join(GlobalConfig.path_workspace_folder(), self.unique_str, "TYPE_" + self.d3d11GameType.GameTypeName, "Metadata.json")
+        else:
+            metadata_path = GlobalConfig.path_extract_gametype_folder(draw_ib=self.draw_ib, gametype_name=self.d3d11GameType.GameTypeName) + "Metadata.json"
+        self.extracted_object:ExtractedObject = ExtractedObjectHelper.read_metadata(metadata_path)
 
         # 这里是要得到每个Component对应的obj_data_model列表
         self.ordered_obj_data_model_list:list[ObjDataModel] = self.branch_model.get_obj_data_model_list_by_draw_ib(draw_ib=self.draw_ib)
@@ -153,8 +159,11 @@ class DrawIBModelWWMI:
         # 然后才能创建ObjBufferModelWWMI
         self.obj_buffer_model_wwmi = ObjBufferModelWWMI(obj_element_model=obj_element_model)
 
+        # 获取 buffer 文件名前缀，SSMT4 格式使用 unique_str，SSMT3 格式使用 draw_ib
+        buffer_prefix = self.unique_str if self.unique_str else self.draw_ib
+
         # 写出Index.buf
-        BufferExportHelper.write_buf_ib_r32_uint(self.obj_buffer_model_wwmi.ib,self.draw_ib + "-Component1.buf")
+        BufferExportHelper.write_buf_ib_r32_uint(self.obj_buffer_model_wwmi.ib, buffer_prefix + "-Component1.buf")
         
         # 写出Category Buffer文件
         position_stride = self.d3d11GameType.CategoryStrideDict["Position"]
@@ -163,15 +172,15 @@ class DrawIBModelWWMI:
 
         # 直接遍历 OrderedCategoryNameList 进行写出，保持了顺序和筛选逻辑
         for category_name,category_buf in self.obj_buffer_model_wwmi.category_buffer_dict.items():
-            buf_path = GlobalConfig.path_generatemod_buffer_folder() + self.draw_ib + "-" + category_name + ".buf"
+            buf_path = GlobalConfig.path_generatemod_buffer_folder() + buffer_prefix + "-" + category_name + ".buf"
             with open(buf_path, 'wb') as ibf:
                 category_buf.tofile(ibf)
 
         # 写出ShapeKey相关Buffer文件
         if self.obj_buffer_model_wwmi.export_shapekey:
-            BufferExportHelper.write_buf_shapekey_offsets(self.obj_buffer_model_wwmi.shapekey_offsets,self.draw_ib + "-" + "ShapeKeyOffset.buf")
-            BufferExportHelper.write_buf_shapekey_vertex_ids(self.obj_buffer_model_wwmi.shapekey_vertex_ids,self.draw_ib + "-" + "ShapeKeyVertexId.buf")
-            BufferExportHelper.write_buf_shapekey_vertex_offsets(self.obj_buffer_model_wwmi.shapekey_vertex_offsets,self.draw_ib + "-" + "ShapeKeyVertexOffset.buf")
+            BufferExportHelper.write_buf_shapekey_offsets(self.obj_buffer_model_wwmi.shapekey_offsets, buffer_prefix + "-" + "ShapeKeyOffset.buf")
+            BufferExportHelper.write_buf_shapekey_vertex_ids(self.obj_buffer_model_wwmi.shapekey_vertex_ids, buffer_prefix + "-" + "ShapeKeyVertexId.buf")
+            BufferExportHelper.write_buf_shapekey_vertex_offsets(self.obj_buffer_model_wwmi.shapekey_vertex_offsets, buffer_prefix + "-" + "ShapeKeyVertexOffset.buf")
 
         # 写出BLENDINDICES的Remap数据
         if self.blend_remap:
@@ -202,7 +211,7 @@ class DrawIBModelWWMI:
                 vg_array[:, i] = sampled_blendindices[:, i].astype(numpy.uint16)
 
             # 写出到文件
-            BufferExportHelper.write_buf_blendindices_uint16(vg_array, self.draw_ib + "-BlendRemapVertexVG.buf")
+            BufferExportHelper.write_buf_blendindices_uint16(vg_array, buffer_prefix + "-BlendRemapVertexVG.buf")
 
 
         # 删除临时融合的obj对象
@@ -514,14 +523,17 @@ class DrawIBModelWWMI:
         # also expose which components actually used remapping
         self.blend_remap_used = remap_used
 
+        # 获取 buffer 文件名前缀，SSMT4 格式使用 unique_str，SSMT3 格式使用 draw_ib
+        buffer_prefix = self.unique_str if self.unique_str else self.draw_ib
+
         # 写出BlendRemapForward.buf
         if blend_remap_forward.size != 0:
-            with open(os.path.join(output_dir, f"{self.draw_ib}-BlendRemapForward.buf"), 'wb') as f:
+            with open(os.path.join(output_dir, f"{buffer_prefix}-BlendRemapForward.buf"), 'wb') as f:
                 blend_remap_forward.tofile(f)
 
         # 写出BlendRemapReverse.buf
         if blend_remap_reverse.size != 0:
-            with open(os.path.join(output_dir, f"{self.draw_ib}-BlendRemapReverse.buf"), 'wb') as f:
+            with open(os.path.join(output_dir, f"{buffer_prefix}-BlendRemapReverse.buf"), 'wb') as f:
                 blend_remap_reverse.tofile(f)
 
 

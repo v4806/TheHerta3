@@ -1,6 +1,7 @@
 """
 GIMI
 """
+import os
 import bpy
 
 from ..config.main_config import GlobalConfig
@@ -14,6 +15,96 @@ from ..blueprint.blueprint_model import BluePrintModel
 from ..common.m_ini_builder import M_IniBuilder,M_IniSection,M_SectionType
 from ..common.m_ini_helper import M_IniHelper,M_IniHelper
 from ..common.m_ini_helper_gui import M_IniHelperGUI
+
+from ..utils.json_utils import JsonUtils
+from ..utils.config_utils import ConfigUtils
+
+
+def check_and_try_generate_import_json_for_ssmt4() -> dict:
+    '''
+    检查 Import.json 是否存在，如果不存在则尝试自动生成
+    返回 draw_ib_gametypename_dict
+    '''
+    workspace_import_json_path = os.path.join(GlobalConfig.path_workspace_folder(), "Import.json")
+    
+    if os.path.exists(workspace_import_json_path):
+        return JsonUtils.LoadFromFile(workspace_import_json_path)
+    
+    print("Import.json 不存在，尝试自动生成...")
+    
+    draw_ib_gametypename_dict = {}
+    
+    current_workspace_folder = GlobalConfig.path_workspace_folder()
+    
+    try:
+        all_folders = [f.name for f in os.scandir(current_workspace_folder) if f.is_dir()]
+    except Exception as e:
+        return draw_ib_gametypename_dict
+    
+    for folder_name in all_folders:
+        folder_path = os.path.join(current_workspace_folder, folder_name)
+        
+        has_type_folder = False
+        try:
+            subdirs = os.listdir(folder_path)
+            for subdir in subdirs:
+                if subdir.startswith("TYPE_"):
+                    has_type_folder = True
+                    break
+        except:
+            pass
+        
+        if not has_type_folder:
+            continue
+        
+        if "-" in folder_name:
+            draw_ib_key = folder_name
+        else:
+            draw_ib_key = folder_name
+        
+        dirs = os.listdir(folder_path)
+        gpu_folders = []
+        cpu_folders = []
+        
+        for dirname in dirs:
+            if not dirname.startswith("TYPE_"):
+                continue
+            type_folder_path = os.path.join(folder_path, dirname)
+            if dirname.startswith("TYPE_GPU"):
+                gpu_folders.append(type_folder_path)
+            elif dirname.startswith("TYPE_CPU"):
+                cpu_folders.append(type_folder_path)
+        
+        all_type_folders = gpu_folders + cpu_folders
+        
+        for type_folder_path in all_type_folders:
+            import_json_path = os.path.join(type_folder_path, "import.json")
+            if os.path.exists(import_json_path):
+                try:
+                    import_json = JsonUtils.LoadFromFile(import_json_path)
+                    work_game_type = import_json.get("WorkGameType", "")
+                    if work_game_type:
+                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
+                        break
+                except Exception:
+                    continue
+            
+            tmp_json_path = os.path.join(type_folder_path, "tmp.json")
+            if os.path.exists(tmp_json_path):
+                try:
+                    tmp_json = ConfigUtils.read_tmp_json(type_folder_path)
+                    work_game_type = tmp_json.get("WorkGameType", "")
+                    if work_game_type:
+                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
+                        break
+                except Exception:
+                    continue
+    
+    if draw_ib_gametypename_dict:
+        JsonUtils.SaveToFile(json_dict=draw_ib_gametypename_dict, filepath=workspace_import_json_path)
+    
+    return draw_ib_gametypename_dict
+
 
 class GIMITextureMarkName:
     '''
@@ -39,14 +130,59 @@ class ModModelGIMI:
         # (3) 这些属性用于ini生成
         self.texture_hash_filter_index_dict = {}
 
+    def _find_ssmt4_unique_str(self, draw_ib: str, draw_ib_gametypename_dict: dict) -> str:
+        '''
+        查找 SSMT4 格式的 unique_str
+        
+        第三代格式（SSMT3）：文件夹结构为 DrawIB/TYPE_xxx/
+        第四代格式（SSMT4）：文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
+        
+        通过检查工作空间中是否存在以 draw_ib 开头的 SSMT4 格式文件夹来判断
+        '''
+        workspace_folder = GlobalConfig.path_workspace_folder()
+        
+        if draw_ib in draw_ib_gametypename_dict:
+            return ""
+        
+        try:
+            all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
+            ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib + "-")]
+            
+            if ssmt4_folders:
+                for folder_name in ssmt4_folders:
+                    if folder_name in draw_ib_gametypename_dict:
+                        return folder_name
+                    
+                    folder_path = os.path.join(workspace_folder, folder_name)
+                    try:
+                        subdirs = os.listdir(folder_path)
+                        for subdir in subdirs:
+                            if subdir.startswith("TYPE_"):
+                                return folder_name
+                    except:
+                        continue
+        except Exception as e:
+            print(f"查找 SSMT4 文件夹时出错: {e}")
+        
+        return ""
+
     def parse_draw_ib_draw_ib_model_dict(self):
         '''
         根据obj的命名规则，推导出DrawIB并抽象为DrawIBModel
-        如果用户用不到某个DrawIB的话，就可以隐藏掉对应的obj
-        隐藏掉的obj就不会被统计生成DrawIBModel，做到只导入模型，不生成Mod的效果。
+        支持第三代(SSMT3)和第四代(SSMT4)格式
+        
+        第三代格式：物体名称为 DrawIB-Component.Alias，文件夹结构为 DrawIB/TYPE_xxx/
+        第四代格式：物体名称为 DrawIB-IndexCount-FirstIndex.Alias，文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
         '''
+        draw_ib_gametypename_dict = check_and_try_generate_import_json_for_ssmt4()
+        
         for draw_ib in self.branch_model.draw_ib__component_count_list__dict.keys():
-            draw_ib_model = DrawIBModel(draw_ib=draw_ib,branch_model=self.branch_model)
+            unique_str = self._find_ssmt4_unique_str(draw_ib, draw_ib_gametypename_dict)
+            
+            if unique_str:
+                print(f"检测到 SSMT4 格式: draw_ib={draw_ib}, unique_str={unique_str}")
+            
+            draw_ib_model = DrawIBModel(draw_ib=draw_ib, branch_model=self.branch_model, unique_str=unique_str)
             self.drawib_drawibmodel_dict[draw_ib] = draw_ib_model
 
     def add_unity_vs_texture_override_vb_sections(
@@ -54,17 +190,17 @@ class ModModelGIMI:
             config_ini_builder:M_IniBuilder,
             draw_ib_model:DrawIBModel):
         '''
-        添加
+
         '''
 
-        # 声明TextureOverrideVB部分，只有使用GPU-PreSkinning时是直接替换hash对应槽位
         d3d11_game_type = draw_ib_model.d3d11GameType
         draw_ib = draw_ib_model.draw_ib
 
-        # 只有GPU-PreSkinning需要生成TextureOverrideVB部分，CPU类型不需要
-
         texture_override_vb_section = M_IniSection(M_SectionType.TextureOverrideVB)
         texture_override_vb_section.append("; " + draw_ib + " ")
+        
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
+        
         for category_name in d3d11_game_type.OrderedCategoryNameList:
             category_hash = draw_ib_model.import_config.category_hash_dict[category_name]
 
@@ -73,21 +209,21 @@ class ModModelGIMI:
             texture_override_vb_section.append("hash = " + category_hash)
 
             
-            # (1) 先初始化CommandList
             drawtype_indent_prefix = ""
    
             
-            # 如果出现了VertexLimitRaise，Texcoord槽位需要检测filter_index才能替换
             filterindex_indent_prefix = ""
 
 
-            # 遍历获取所有在当前分类hash下进行替换的分类，并添加对应的资源替换
             for original_category_name, draw_category_name in d3d11_game_type.CategoryDrawCategoryDict.items():
                 if category_name == draw_category_name:
                     category_original_slot = d3d11_game_type.CategoryExtractSlotDict[original_category_name]
-                    texture_override_vb_section.append(filterindex_indent_prefix + drawtype_indent_prefix + category_original_slot + " = Resource" + draw_ib + original_category_name)
+                    if unique_str:
+                        resource_name = "Resource_" + unique_str.replace("-", "_") + "_" + original_category_name
+                    else:
+                        resource_name = "Resource" + draw_ib + original_category_name
+                    texture_override_vb_section.append(filterindex_indent_prefix + drawtype_indent_prefix + category_original_slot + " = " + resource_name)
 
-            # draw一般都是在Blend槽位上进行的，所以我们这里要判断确定是Blend要替换的hash才能进行draw。
             draw_category_name = d3d11_game_type.CategoryDrawCategoryDict.get("Blend",None)
             if draw_category_name is not None and category_name == d3d11_game_type.CategoryDrawCategoryDict["Blend"]:
                 texture_override_vb_section.append(drawtype_indent_prefix + "handling = skip")
@@ -95,7 +231,6 @@ class ModModelGIMI:
 
 
             
-            # 分支架构，如果是Position则需提供激活变量
             if category_name == d3d11_game_type.CategoryDrawCategoryDict["Position"]:
                 if len(self.branch_model.keyname_mkey_dict.keys()) != 0:
                     texture_override_vb_section.append("$active" + str(M_GlobalKeyCounter.generated_mod_number) + " = 1")
@@ -117,92 +252,164 @@ class ModModelGIMI:
         texture_override_ib_section.append("handling = skip")
         texture_override_ib_section.new_line()
 
-        for count_i,part_name in enumerate(draw_ib_model.import_config.part_name_list):
-            match_first_index = draw_ib_model.import_config.match_first_index_list[count_i]
-            
-            style_part_name = "Component" + part_name
-            texture_override_name_suffix = "IB_" + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_" + style_part_name
-
-            # 读取使用的IBResourceName，如果读取不到，就使用默认的
-            ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(part_name,"")
-            
-
-            texture_override_ib_section.append("[TextureOverride_" + texture_override_name_suffix + "]")
-            texture_override_ib_section.append("hash = " + draw_ib)
-            texture_override_ib_section.append("match_first_index = " + match_first_index)
-
-
-            # If ib buf is emprt, continue to avoid add ib resource replace.
-            ib_buf = draw_ib_model.componentname_ibbuf_dict.get("Component " + part_name,None)
-            if ib_buf is None or len(ib_buf) == 0:
-                # 不导出对应部位时，要写ib = null，否则在部分场景会发生卡顿，原因未知但是这就是解决方案。
-                texture_override_ib_section.append("ib = null")
-                texture_override_ib_section.new_line()
-                continue
-
-
-            # Add ib replace
-            texture_override_ib_section.append("ib = " + ib_resource_name)
-
-
-            print("Test: ZZZ")
-            # Add slot style texture slot replace.
-            if not Properties_GenerateMod.forbid_auto_texture_ini():
-                texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name,None)
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
+        
+        if unique_str:
+            for component_model in draw_ib_model._component_model_list:
+                component_name = component_model.component_name
+                first_index = getattr(component_model, 'first_index', 0)
+                component_index = component_name.replace("Component ", "")
                 
-                # 先判断是否具有NormalMap
-                normal_exists = False
+                style_part_name = "Component" + component_index
+                texture_override_name_suffix = "IB_" + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_" + style_part_name
                 
-                # 如果使用ORFix技术，则所有的槽位都要强制使用固定的槽位
-                if Properties_GenerateMod.gimi_use_orfix():
-                    if texture_markup_info_list is not None:
+                ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(component_index, "")
+                
+                texture_override_ib_section.append("[TextureOverride_" + texture_override_name_suffix + "]")
+                texture_override_ib_section.append("hash = " + draw_ib)
+                texture_override_ib_section.append("match_first_index = " + str(first_index))
+                
+                ib_buf = draw_ib_model.componentname_ibbuf_dict.get(component_name, None)
+                if ib_buf is None or len(ib_buf) == 0:
+                    texture_override_ib_section.append("ib = null")
+                    texture_override_ib_section.new_line()
+                else:
+                    texture_override_ib_section.append("ib = " + ib_resource_name)
+                    
+                    if not Properties_GenerateMod.forbid_auto_texture_ini():
+                        texture_markup_info_list = None
+                        if component_model.final_ordered_draw_obj_model_list:
+                            first_obj = component_model.final_ordered_draw_obj_model_list[0]
+                            obj_full_name = f"{first_obj.draw_ib}-{first_obj.index_count}-{first_obj.first_index}"
+                            print(f"调试: obj_full_name={obj_full_name}, is_ssmt4={first_obj.is_ssmt4}")
+                            print(f"调试: partname_texturemarkinfolist_dict keys={list(draw_ib_model.import_config.partname_texturemarkinfolist_dict.keys())}")
+                            texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(obj_full_name, None)
+                        if texture_markup_info_list is None:
+                            texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(component_index, None)
+                        if texture_markup_info_list is None:
+                            texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get("1", None)
+                        print(f"调试: texture_markup_info_list={texture_markup_info_list}")
                         
-                        for texture_markup_info in texture_markup_info_list:
-                            if texture_markup_info.mark_name == GIMITextureMarkName.NormalMap:
-                                normal_exists = True
-                        
-                        altered_texture_markup_info_list = []
-                        if normal_exists:
+                        if texture_markup_info_list is not None:
+                            normal_exists = False
+                            
+                            if Properties_GenerateMod.gimi_use_orfix():
+                                for texture_markup_info in texture_markup_info_list:
+                                    if texture_markup_info.mark_name == GIMITextureMarkName.NormalMap:
+                                        normal_exists = True
+                                
+                                altered_texture_markup_info_list = []
+                                if normal_exists:
+                                    for texture_markup_info in texture_markup_info_list:
+                                        if texture_markup_info.mark_name == GIMITextureMarkName.NormalMap:
+                                            texture_markup_info.mark_slot = "ps-t0"
+                                        elif texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
+                                            texture_markup_info.mark_slot = "ps-t1"
+                                        elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
+                                            texture_markup_info.mark_slot = "ps-t2"
+                                        altered_texture_markup_info_list.append(texture_markup_info)
+                                else:
+                                    for texture_markup_info in texture_markup_info_list:
+                                        if texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
+                                            texture_markup_info.mark_slot = "ps-t0"
+                                        elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
+                                            texture_markup_info.mark_slot = "ps-t1"
+                                        altered_texture_markup_info_list.append(texture_markup_info)
+                                
+                                texture_markup_info_list = altered_texture_markup_info_list
+                            
+                            slot_replace_exists = False
+                            for texture_markup_info in texture_markup_info_list:
+                                if texture_markup_info.mark_type == "Slot":
+                                    slot_replace_exists = True
+                                    texture_override_ib_section.append(texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
+
+                            if Properties_GenerateMod.gimi_use_orfix() and slot_replace_exists:
+                                if normal_exists:
+                                    texture_override_ib_section.append("run = CommandList\\global\\ORFix\\ORFix")
+                                else:
+                                    texture_override_ib_section.append("run = CommandList\\global\\ORFix\\NNFix")
+                    
+                    drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+                    for drawindexed_str in drawindexed_str_list:
+                        texture_override_ib_section.append(drawindexed_str)
+        else:
+            for count_i,part_name in enumerate(draw_ib_model.import_config.part_name_list):
+                match_first_index = draw_ib_model.import_config.match_first_index_list[count_i]
+                
+                style_part_name = "Component" + part_name
+                texture_override_name_suffix = "IB_" + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_" + style_part_name
+
+                ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(part_name,"")
+                
+
+                texture_override_ib_section.append("[TextureOverride_" + texture_override_name_suffix + "]")
+                texture_override_ib_section.append("hash = " + draw_ib)
+                texture_override_ib_section.append("match_first_index = " + match_first_index)
+
+
+                ib_buf = draw_ib_model.componentname_ibbuf_dict.get("Component " + part_name,None)
+                if ib_buf is None or len(ib_buf) == 0:
+                    texture_override_ib_section.append("ib = null")
+                    texture_override_ib_section.new_line()
+                    continue
+
+
+                texture_override_ib_section.append("ib = " + ib_resource_name)
+
+
+                print("Test: ZZZ")
+                if not Properties_GenerateMod.forbid_auto_texture_ini():
+                    texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name,None)
+                    
+                    normal_exists = False
+                    
+                    if Properties_GenerateMod.gimi_use_orfix():
+                        if texture_markup_info_list is not None:
+                            
                             for texture_markup_info in texture_markup_info_list:
                                 if texture_markup_info.mark_name == GIMITextureMarkName.NormalMap:
-                                    texture_markup_info.mark_slot = "ps-t0"
-                                elif texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
-                                    texture_markup_info.mark_slot = "ps-t1"
-                                elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
-                                    texture_markup_info.mark_slot = "ps-t2"
-                                altered_texture_markup_info_list.append(texture_markup_info)
-                        else:
-                            for texture_markup_info in texture_markup_info_list:
-                                if texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
-                                    texture_markup_info.mark_slot = "ps-t0"
-                                elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
-                                    texture_markup_info.mark_slot = "ps-t1"
-                                altered_texture_markup_info_list.append(texture_markup_info)
-                        
-                        texture_markup_info_list = altered_texture_markup_info_list
-                
-                # print(texture_markup_info_list)
-                # It may not have auto texture
-                if texture_markup_info_list is not None:
-                    slot_replace_exists = False
-                    for texture_markup_info in texture_markup_info_list:
-                        if texture_markup_info.mark_type == "Slot":
-                            slot_replace_exists = True
-                            texture_override_ib_section.append(texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
+                                    normal_exists = True
+                            
+                            altered_texture_markup_info_list = []
+                            if normal_exists:
+                                for texture_markup_info in texture_markup_info_list:
+                                    if texture_markup_info.mark_name == GIMITextureMarkName.NormalMap:
+                                        texture_markup_info.mark_slot = "ps-t0"
+                                    elif texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
+                                        texture_markup_info.mark_slot = "ps-t1"
+                                    elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
+                                        texture_markup_info.mark_slot = "ps-t2"
+                                    altered_texture_markup_info_list.append(texture_markup_info)
+                            else:
+                                for texture_markup_info in texture_markup_info_list:
+                                    if texture_markup_info.mark_name == GIMITextureMarkName.DiffuseMap:
+                                        texture_markup_info.mark_slot = "ps-t0"
+                                    elif texture_markup_info.mark_name == GIMITextureMarkName.LightMap:
+                                        texture_markup_info.mark_slot = "ps-t1"
+                                    altered_texture_markup_info_list.append(texture_markup_info)
+                            
+                            texture_markup_info_list = altered_texture_markup_info_list
+                    
+                    if texture_markup_info_list is not None:
+                        slot_replace_exists = False
+                        for texture_markup_info in texture_markup_info_list:
+                            if texture_markup_info.mark_type == "Slot":
+                                slot_replace_exists = True
+                                texture_override_ib_section.append(texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
 
-                    if Properties_GenerateMod.gimi_use_orfix() and slot_replace_exists:
-                        if normal_exists:
-                            texture_override_ib_section.append("run = CommandList\\global\\ORFix\\ORFix")
-                        else:
-                            texture_override_ib_section.append("run = CommandList\\global\\ORFix\\NNFix")
+                        if Properties_GenerateMod.gimi_use_orfix() and slot_replace_exists:
+                            if normal_exists:
+                                texture_override_ib_section.append("run = CommandList\\global\\ORFix\\ORFix")
+                            else:
+                                texture_override_ib_section.append("run = CommandList\\global\\ORFix\\NNFix")
 
-            # DrawIndexed部分
-            component_name = "Component " + part_name
-            component_model = draw_ib_model.component_name_component_model_dict[component_name]
+                component_name = "Component " + part_name
+                component_model = draw_ib_model.component_name_component_model_dict[component_name]
 
-            drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
-            for drawindexed_str in drawindexed_str_list:
-                texture_override_ib_section.append(drawindexed_str)
+                drawindexed_str_list = M_IniHelper.get_drawindexed_str_list(component_model.final_ordered_draw_obj_model_list)
+                for drawindexed_str in drawindexed_str_list:
+                    texture_override_ib_section.append(drawindexed_str)
 
             
         config_ini_builder.append_section(texture_override_ib_section)
@@ -247,22 +454,22 @@ class ModModelGIMI:
         
         buffer_folder_name = GlobalConfig.get_buffer_folder_name()
         
+        unique_str = getattr(draw_ib_model, 'unique_str', "")
+        
         for category_name in draw_ib_model.d3d11GameType.OrderedCategoryNameList:
-            resource_vb_section.append("[Resource" + draw_ib_model.draw_ib + category_name + "]")
-            resource_vb_section.append("type = Buffer")
-
-            resource_vb_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
+            if unique_str:
+                resource_name = "Resource_" + unique_str.replace("-", "_") + "_" + category_name
+                buf_filename = unique_str + "-" + category_name + ".buf"
+            else:
+                resource_name = "Resource" + draw_ib_model.draw_ib + category_name
+                buf_filename = draw_ib_model.draw_ib + "-" + category_name + ".buf"
             
-            resource_vb_section.append("filename = " + buffer_folder_name + "/" + draw_ib_model.draw_ib + "-" + category_name + ".buf")
-            # resource_vb_section.append(";VertexCount: " + str(draw_ib_model.draw_number))
+            resource_vb_section.append("[" + resource_name + "]")
+            resource_vb_section.append("type = Buffer")
+            resource_vb_section.append("stride = " + str(draw_ib_model.d3d11GameType.CategoryStrideDict[category_name]))
+            resource_vb_section.append("filename = " + buffer_folder_name + "/" + buf_filename)
             resource_vb_section.new_line()
         
-        '''
-        Add Resource IB Section
-
-        We default use R32_UINT because R16_UINT have a very small number limit.
-        '''
-
         for partname, ib_filename in draw_ib_model.PartName_IBBufferFileName_Dict.items():
             ib_resource_name = draw_ib_model.PartName_IBResourceName_Dict.get(partname,None)
             resource_vb_section.append("[" + ib_resource_name + "]")
