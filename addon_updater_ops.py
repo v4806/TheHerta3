@@ -153,18 +153,16 @@ class AddonUpdaterInstallPopup(bpy.types.Operator):
             col.scale_y = 0.7
             col.label(text="更新已就绪！",
                       icon="LOOP_FORWARDS")
-            col.label(text="选择 '立即更新' 并按 OK 进行安装，",
+            col.label(text="点击 OK 直接更新到最新版本",
                       icon="BLANK1")
-            col.label(text="或点击外部窗口以推迟", icon="BLANK1")
             row = col.row()
             row.prop(self, "ignore_enum", expand=True)
             col.split()
         elif not updater.update_ready:
             col = layout.column()
             col.scale_y = 0.7
-            col.label(text="暂无可用性=更新")
+            col.label(text="暂无可用更新")
             col.label(text="点击确认以结束对话")
-            # add option to force install
         else:
             # Case: updater.update_ready = None
             # we have not yet checked for the update.
@@ -175,37 +173,39 @@ class AddonUpdaterInstallPopup(bpy.types.Operator):
     def execute(self, context):
         # In case of error importing updater.
         if updater.invalid_updater:
+            self.report({'ERROR'}, "更新器初始化错误")
             return {'CANCELLED'}
 
         if updater.manual_only:
             bpy.ops.wm.url_open(url=updater.website)
-        elif updater.update_ready:
+            return {'FINISHED'}
 
-            # Action based on enum selection.
-            if self.ignore_enum == 'defer':
-                return {'FINISHED'}
-            elif self.ignore_enum == 'ignore':
-                updater.ignore_update()
-                return {'FINISHED'}
+        # Action based on enum selection.
+        if self.ignore_enum == 'defer':
+            return {'FINISHED'}
+        elif self.ignore_enum == 'ignore':
+            updater.ignore_update()
+            return {'FINISHED'}
 
+        # 直接执行更新，不需要版本选择
+        try:
             res = updater.run_update(force=False,
                                      callback=post_update_callback,
                                      clean=self.clean_install)
 
             # Should return 0, if not something happened.
-            if updater.verbose:
-                if res == 0:
+            if res == 0:
+                self.report({'INFO'}, "更新成功！请重启Blender")
+                if updater.verbose:
                     print("更新器返回成功")
-                else:
+            else:
+                self.report({'ERROR'}, f"更新失败，错误代码: {res}")
+                if updater.verbose:
                     print("更新器返回 {}, 发生错误".format(res))
-        elif updater.update_ready is None:
-            _ = updater.check_for_update(now=True)
+        except Exception as e:
+            self.report({'ERROR'}, f"更新时出错: {str(e)}")
+            return {'CANCELLED'}
 
-            # Re-launch this dialog.
-            atr = AddonUpdaterInstallPopup.bl_idname.split(".")
-            getattr(getattr(bpy.ops, atr[0]), atr[1])('INVOKE_DEFAULT')
-        else:
-            updater.print_verbose("Doing nothing, not ready for update")
         return {'FINISHED'}
 
 
@@ -219,12 +219,11 @@ class AddonUpdaterCheckNow(bpy.types.Operator):
 
     def execute(self, context):
         if updater.invalid_updater:
+            self.report({'ERROR'}, "更新器初始化错误")
             return {'CANCELLED'}
 
         if updater.async_checking and updater.error is None:
             # Check already happened.
-            # Used here to just avoid constant applying settings below.
-            # Ignoring if error, to prevent being stuck on the error screen.
             return {'CANCELLED'}
 
         # apply the UI settings
@@ -242,9 +241,22 @@ class AddonUpdaterCheckNow(bpy.types.Operator):
             hours=settings.updater_interval_hours,
             minutes=settings.updater_interval_minutes)
 
-        # Input is an optional callback function. This function should take a
-        # bool input. If true: update ready, if false: no update ready.
-        updater.check_for_update_now(ui_refresh)
+        # 直接检查并更新到main分支
+        try:
+            (update_ready, version, link) = updater.check_for_update(now=True)
+            if update_ready:
+                # 直接执行更新
+                res = updater.run_update(force=False, callback=post_update_callback, clean=False)
+                if res == 0:
+                    self.report({'INFO'}, "更新成功！请重启Blender")
+                else:
+                    self.report({'ERROR'}, f"更新失败，错误代码: {res}")
+            else:
+                self.report({'INFO'}, "已是最新版本")
+        except Exception as e:
+            self.report({'ERROR'}, f"检查更新时出错: {str(e)}")
+            updater._error = str(e)
+            updater._error_msg = str(e)
 
         return {'FINISHED'}
 
@@ -350,6 +362,9 @@ class AddonUpdaterUpdateTarget(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         if updater.invalid_updater:
+            return False
+        # 在分支模式下，不显示版本选择
+        if updater.include_branches:
             return False
         return updater.update_ready is not None and len(updater.tags) > 0
 
@@ -1012,16 +1027,13 @@ def update_settings_ui(self, context, element=None):
         split.scale_y = 2
         split.operator(AddonUpdaterEndBackground.bl_idname, text="", icon="X")
 
-    elif updater.include_branches and \
-            len(updater.tags) == len(updater.include_branch_list) and not \
-            updater.manual_only:
-        # No releases found, but still show the appropriate branch.
+    elif updater.include_branches:
+        # 分支模式：直接显示更新按钮
         sub_col = col.row(align=True)
         sub_col.scale_y = 1
         split = sub_col.split(align=True)
         split.scale_y = 2
-        update_now_txt = "Update directly to {}".format(
-            updater.include_branch_list[0])
+        update_now_txt = "立即更新到最新版本"
         split.operator(AddonUpdaterUpdateNow.bl_idname, text=update_now_txt)
         split = sub_col.split(align=True)
         split.scale_y = 2
@@ -1154,15 +1166,13 @@ def update_settings_ui_condensed(self, context, element=None):
         split.scale_y = 2
         split.operator(AddonUpdaterEndBackground.bl_idname, text="", icon="X")
 
-    elif updater.include_branches and \
-            len(updater.tags) == len(updater.include_branch_list) and not \
-            updater.manual_only:
-        # No releases found, but still show the appropriate branch.
+    elif updater.include_branches:
+        # 分支模式：直接显示更新按钮
         sub_col = col.row(align=True)
         sub_col.scale_y = 1
         split = sub_col.split(align=True)
         split.scale_y = 2
-        now_txt = "Update directly to " + str(updater.include_branch_list[0])
+        now_txt = "立即更新到最新版本"
         split.operator(AddonUpdaterUpdateNow.bl_idname, text=now_txt)
         split = sub_col.split(align=True)
         split.scale_y = 2

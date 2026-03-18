@@ -1307,21 +1307,12 @@ class SingletonUpdater:
             return (False, None, None)
         elif str(new_version).lower() in self._include_branch_list:
             # Handle situation where master/whichever branch is included
-            # however, this code effectively is not triggered now
-            # as new_version will only be tag names, not branch names.
-            if not self._include_branch_auto_check:
-                # Don't offer update as ready, but set the link for the
-                # default branch for installing.
-                self._update_ready = False
-                self._update_version = new_version
-                self._update_link = link
-                self.save_updater_json()
-                return (True, new_version, link)
-            else:
-                # Bypass releases and look at timestamp of last update from a
-                # branch compared to now, see if commit values match or not.
-                raise ValueError("include_branch_autocheck: NOT YET DEVELOPED")
-
+            # 对于分支模式，总是允许更新
+            self._update_ready = True
+            self._update_version = new_version
+            self._update_link = link
+            self.save_updater_json()
+            return (True, new_version, link)
         else:
             # Situation where branches not included.
             if new_version > self._current_version:
@@ -1395,7 +1386,8 @@ class SingletonUpdater:
             res = True  # fake "success" zip download flag
 
         elif not force:
-            if not self._update_ready:
+            # 对于分支模式，总是允许更新
+            if not self._update_ready and not self._include_branches:
                 self.print_verbose("Update stopped, new version not ready")
                 if callback:
                     callback(
