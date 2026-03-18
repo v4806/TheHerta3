@@ -361,7 +361,62 @@ class ImportConfig:
 
         # 自动贴图依赖于这个字典
         partname_texturemarkupinfolist_jsondict = tmp_json_dict.get("ComponentTextureMarkUpInfoListDict", {})
-
+        
+        # SSMT4 格式下，需要检查是否有多个分块的 import.json
+        if self.unique_str:
+            workspace_folder = GlobalConfig.path_workspace_folder()
+            draw_ib_base = self.draw_ib.split("-")[0]  # 提取 draw_ib 基础部分
+            
+            # 查找所有以 draw_ib 开头的文件夹
+            try:
+                all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
+                ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib_base + "-")]
+                
+                print(f"调试: SSMT4 格式，找到的分块文件夹: {ssmt4_folders}")
+                
+                # 为每个分块读取独立的 import.json
+                for folder_name in ssmt4_folders:
+                    folder_path = os.path.join(workspace_folder, folder_name)
+                    type_folders = []
+                    try:
+                        subdirs = os.listdir(folder_path)
+                        for subdir in subdirs:
+                            if subdir.startswith("TYPE_"):
+                                type_folders.append(os.path.join(folder_path, subdir))
+                    except:
+                        continue
+                    
+                    for type_folder_path in type_folders:
+                        import_json_path = os.path.join(type_folder_path, "import.json")
+                        if os.path.exists(import_json_path):
+                            try:
+                                import_json = JsonUtils.LoadFromFile(import_json_path)
+                                folder_texture_dict = import_json.get("ComponentTextureMarkUpInfoListDict", {})
+                                
+                                # 将材质信息添加到字典中
+                                for partname, texture_markup_info_dict_list in folder_texture_dict.items():
+                                    texture_markup_info_list = []
+                                    
+                                    for texture_markup_info_dict in texture_markup_info_dict_list:
+                                        markup_info = TextureMarkUpInfo()
+                                        markup_info.mark_name = texture_markup_info_dict["MarkName"]
+                                        markup_info.mark_type = texture_markup_info_dict["MarkType"]
+                                        markup_info.mark_slot = texture_markup_info_dict["MarkSlot"]
+                                        markup_info.mark_hash = texture_markup_info_dict["MarkHash"]
+                                        markup_info.mark_filename = texture_markup_info_dict["MarkFileName"]
+                                        
+                                        texture_markup_info_list.append(markup_info)
+                                    
+                                    # 使用文件夹名作为 key（格式：draw_ib-first_index-index_count）
+                                    self.partname_texturemarkinfolist_dict[folder_name] = texture_markup_info_list
+                                    print(f"调试: 从文件夹 {folder_name} 读取材质信息，key={folder_name}")
+                            except Exception as e:
+                                print(f"调试: 读取文件夹 {folder_name} 的 import.json 失败: {e}")
+                                continue
+            except Exception as e:
+                print(f"调试: SSMT4 格式检查失败: {e}")
+        
+        # 读取主 tmp.json 中的材质信息（SSMT3 格式或 SSMT4 的主文件）
         for partname, texture_markup_info_dict_list in partname_texturemarkupinfolist_jsondict.items():
             texture_markup_info_list = []
 

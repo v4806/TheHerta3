@@ -209,7 +209,46 @@ class M_IniHelper:
                     continue
 
                 target_path = GlobalConfig.path_generatemod_texture_folder(draw_ib=draw_ib_key) + texture_markup_info.mark_filename
+                
+                # SSMT4 格式下，需要根据材质信息字典的 key 来确定正确的源文件夹
                 source_path = os.path.join(draw_ib_model.import_config.extract_gametype_folder_path, texture_markup_info.mark_filename)
+                
+                # 检查源文件是否存在，如果不存在，尝试从对应的分块文件夹中查找
+                if not os.path.exists(source_path):
+                    # 在 SSMT4 格式下，材质信息字典的 key 是文件夹名
+                    # 需要找到包含当前贴图文件的文件夹
+                    texture_filename = texture_markup_info.mark_filename
+                    draw_ib_base = draw_ib_model.draw_ib.split("-")[0] if "-" in draw_ib_model.draw_ib else draw_ib_model.draw_ib
+                    
+                    # 查找所有以 draw_ib_base 开头的文件夹
+                    workspace_folder = GlobalConfig.path_workspace_folder()
+                    try:
+                        all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
+                        ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib_base + "-")]
+                        
+                        # 在每个分块文件夹中查找贴图文件
+                        for folder_name in ssmt4_folders:
+                            folder_path = os.path.join(workspace_folder, folder_name)
+                            if os.path.exists(folder_path):
+                                # 检查 TYPE_ 文件夹
+                                try:
+                                    subdirs = os.listdir(folder_path)
+                                    for subdir in subdirs:
+                                        if subdir.startswith("TYPE_"):
+                                            type_folder_path = os.path.join(folder_path, subdir)
+                                            potential_source_path = os.path.join(type_folder_path, texture_filename)
+                                            if os.path.exists(potential_source_path):
+                                                source_path = potential_source_path
+                                                print(f"调试: 在文件夹 {folder_name} 中找到贴图文件: {texture_filename}")
+                                                break
+                                    if os.path.exists(source_path):
+                                        break
+                                except:
+                                    pass
+                            if os.path.exists(source_path):
+                                break
+                    except Exception as e:
+                        print(f"调试: 查找源文件失败: {e}")
                 
                 # only overwrite when there is no texture file exists.
                 if not os.path.exists(target_path):
