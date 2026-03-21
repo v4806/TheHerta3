@@ -110,9 +110,15 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 filename = next((l.split('=', 1)[1].strip() for l in lines if l.strip().lower().startswith('filename =')), None)
                 if filename: resource_map[section_name.strip('[]')] = os.path.join(base_path, filename.replace('/', os.sep))
         for section_name, lines in sections.items():
-            if section_name.lower().startswith('[textureoverride_ib'):
-                ib_resource_name = next((l.split('=', 1)[1].strip() for l in lines if l.strip().lower().startswith('ib =')), None)
-                if not ib_resource_name or ib_resource_name not in resource_map: continue
+            if section_name.lower().startswith('[textureoverride'):
+                ib_line = next((l for l in lines if l.strip().lower().startswith('ib =')), None)
+                if not ib_line: continue
+                ib_resource_ref = ib_line.split('=', 1)[1].strip()
+                if ib_resource_ref.lower().startswith('ref '):
+                    ib_resource_name = ib_resource_ref[4:].strip()
+                else:
+                    ib_resource_name = ib_resource_ref
+                if ib_resource_name not in resource_map: continue
                 ib_path, current_mesh_name = resource_map[ib_resource_name], None
                 for line in lines:
                     stripped_line = line.strip()
@@ -151,6 +157,30 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 return (min(indices), max(indices)) if indices else (None, None)
         except Exception: return None, None
 
+    def _extract_hash_from_name(self, obj_name):
+        """从物体名称中提取哈希值，支持多种格式
+        
+        支持的格式：
+        - c3806ef1-8322-0.脸部 -> c3806ef1-8322-0
+        - 586b4574-123174-0.00打桩机.001 -> 586b4574-123174-0
+        - 旧格式兼容: c3806ef1.xxx -> c3806ef1
+        """
+        match = re.match(r'^([a-f0-9]{8}-[a-f0-9]+(?:-[a-f0-9]+)?)', obj_name)
+        if match:
+            return match.group(1)
+        match = re.match(r'^([a-f0-9]{8})', obj_name)
+        if match:
+            return match.group(1)
+        return None
+
+    def _hash_to_resource_prefix(self, h):
+        """将哈希值转换为资源名称前缀格式
+        
+        c3806ef1-8322-0 -> c3806ef1_8322_0
+        c3806ef1 -> c3806ef1
+        """
+        return h.replace('-', '_')
+
     def _parse_classification_text_final(self, text_content):
         slot_to_name_to_objects, hash_to_objects, all_objects = OrderedDict(), OrderedDict(), []
         current_slot, current_shapekey_name = None, None
@@ -174,9 +204,8 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 if obj_name not in slot_to_name_to_objects[current_slot][current_shapekey_name]:
                     slot_to_name_to_objects[current_slot][current_shapekey_name].append(obj_name)
                 if obj_name not in all_objects: all_objects.append(obj_name)
-                hash_match = re.search(r'([a-f0-9]{8})', obj_name)
-                if hash_match:
-                    obj_hash = hash_match.group(1)
+                obj_hash = self._extract_hash_from_name(obj_name)
+                if obj_hash:
                     if obj_hash not in hash_to_objects: hash_to_objects[obj_hash] = []
                     if obj_name not in hash_to_objects[obj_hash]: hash_to_objects[obj_hash].append(obj_name)
         return slot_to_name_to_objects, list(hash_to_objects.keys()), hash_to_objects, all_objects
@@ -280,8 +309,8 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         buffers_to_process = set()
         for slot, names_data in slot_to_name_to_objects.items():
             for obj in [o for name, objs in names_data.items() for o in objs]:
-                hash_match = re.search(r'([a-f0-9]{8})', obj)
-                if hash_match: buffers_to_process.add((hash_match.group(1), slot))
+                h = self._extract_hash_from_name(obj)
+                if h: buffers_to_process.add((h, slot))
 
         for h, slot in sorted(list(buffers_to_process)):
             base_filename = f"{h}-Position.buf"
@@ -610,14 +639,15 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             all_unique_objects = list(OrderedDict.fromkeys(obj for slot_data in slot_to_name_to_objects.values() for name_data in slot_data.values() for obj in name_data))
 
             hash_to_base_resources = {}
-            resource_pattern = re.compile(r'\[(Resource([a-f0-9]{8})Position(\d*))\]')
+            resource_pattern = re.compile(r'\[(Resource_?([a-f0-9]{8}(?:[_-][a-f0-9]+)*)_?Position(\d*))\]')
             for section_name in sections.keys():
                 match = resource_pattern.match(section_name)
                 if match:
                     full_name, hash_val, number = match.groups()
-                    if hash_val not in hash_to_base_resources:
-                        hash_to_base_resources[hash_val] = []
-                    hash_to_base_resources[hash_val].append((int(number) if number else 1, full_name))
+                    hash_val_normalized = hash_val.replace('_', '-')
+                    if hash_val_normalized not in hash_to_base_resources:
+                        hash_to_base_resources[hash_val_normalized] = []
+                    hash_to_base_resources[hash_val_normalized].append((int(number) if number else 1, full_name))
             for hash_val in hash_to_base_resources:
                 hash_to_base_resources[hash_val].sort()
                 hash_to_base_resources[hash_val] = [name for key, name in hash_to_base_resources[hash_val]]
@@ -656,12 +686,17 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     if not self._update_shader_file(hash_to_shader_paths[hash_val], hash_slot_data, use_packed, use_delta, hash_unique_names, hash_unique_objects):
                         print(f"更新哈希 {hash_val} 的着色器文件失败")
 
-            vertex_counts = {
-                m.group(1): int(l.split('=')[1].strip())
-                for s, ls in sections.items()
-                for m in [re.search(r'\[TextureOverride_([a-f0-9]{8})_[^_]*_VertexLimitRaise\]', s)]
-                if m for l in ls if l.strip().startswith('override_vertex_count')
-            }
+            vertex_counts = {}
+            for s, ls in sections.items():
+                m = re.match(r'\[TextureOverride_([a-f0-9]{8}(?:[_-][a-f0-9]+)*)_[^_]*_VertexLimitRaise\]', s)
+                if m:
+                    for l in ls:
+                        if l.strip().startswith('override_vertex_count'):
+                            try:
+                                hash_val = m.group(1).replace('_', '-')
+                                vertex_counts[hash_val] = int(l.split('=')[1].strip())
+                            except (ValueError, IndexError):
+                                pass
             
             if '[Constants]' not in sections:
                 sections['[Constants]'] = []
@@ -696,7 +731,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
 
             for h in unique_hashes:
                 base_resources = hash_to_base_resources.get(h, [])
-                res_to_post = base_resources if base_resources else [f"Resource{h}Position"]
+                res_to_post = base_resources if base_resources else [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]
                 for res_name in res_to_post:
                     if f"post {res_name} = copy_desc" not in constants_content:
                         constants_lines.append(f"post {res_name} = copy_desc {res_name}_0")
@@ -757,7 +792,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     slots_for_hash = hash_to_slots.get(h, [])
 
                     if not use_delta:
-                        block_lines.append(f"\n    cs-t50 = copy Resource{h}Position0000")
+                        block_lines.append(f"\n    cs-t50 = copy Resource_{self._hash_to_resource_prefix(h)}_Position0000")
                         t_registers_to_null.append("cs-t50")
 
                     res_suffix = "_packed_pos_delta" if use_packed and use_delta else \
@@ -767,22 +802,22 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}"
                     block_lines.append(f"\n    ; --- Binding Shape Key Buffers (Mode: {mode_str}) ---")
                     for slot in slots_for_hash:
-                        res_name = f"Resource{h}Position100{slot}{res_suffix}"
+                        res_name = f"Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}{res_suffix}"
                         if not (use_packed or use_delta):
-                            res_name = f"Resource{h}Position100{slot}"
+                            res_name = f"Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}"
 
                         t_reg = 51 + slot - 1
                         block_lines.append(f"    cs-t{t_reg} = copy {res_name}")
                         t_registers_to_null.append(f"cs-t{t_reg}")
                         if use_packed:
                             map_reg = 75 + slot - 1
-                            block_lines.append(f"    cs-t{map_reg} = copy Resource{h}Position100{slot}_Map")
+                            block_lines.append(f"    cs-t{map_reg} = copy Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}_Map")
                             t_registers_to_null.append(f"cs-t{map_reg}")
 
                     block_lines.append(f"    cs = ./res/shapekey_anim_{h}.hlsl")
 
                     base_resources = hash_to_base_resources.get(h, [])
-                    res_to_bind = base_resources if base_resources else [f"Resource{h}Position"]
+                    res_to_bind = base_resources if base_resources else [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]
                     if len(res_to_bind) > 1:
                         block_lines.append(f"\n    ; --- Base Mesh Switching ---")
                         for i, res_name in enumerate(res_to_bind, 1):
@@ -791,7 +826,9 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                         res_name = res_to_bind[0]
                         block_lines.extend([f"    cs-u5 = copy {res_name}_0", f"    {res_name} = ref cs-u5"])
 
-                    dispatch_count = vertex_counts.get(h, 0)
+                    dispatch_count = vertex_counts.get(h, 10000)
+                    if dispatch_count == 0:
+                        dispatch_count = 10000
                     block_lines.extend([f"    Dispatch = {dispatch_count}, 1, 1", "    cs-u5 = null", *[f"    {reg} = null" for reg in sorted(list(set(t_registers_to_null)))]])
                     compute_blocks_to_add[block_name] = block_lines
 
@@ -799,7 +836,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             generated_section_names = set()
 
             for h in unique_hashes:
-                section_name = f"[Resource{h}Position0000]"
+                section_name = f"[Resource_{self._hash_to_resource_prefix(h)}_Position0000]"
                 if section_name not in sections and section_name not in generated_section_names:
                     stride = hash_to_stride.get(h, 40)
                     new_resource_lines.extend([section_name, "type = Buffer", f"stride = {stride}", f"filename = Buffer0000/{h}-Position.buf", ""])
@@ -807,9 +844,8 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
 
             for slot, names_data in slot_to_name_to_objects.items():
                 for obj in [o for name, objs in names_data.items() for o in objs]:
-                    hash_match = re.search(r'([a-f0-9]{8})', obj)
-                    if hash_match:
-                        h = hash_match.group(1)
+                    h = self._extract_hash_from_name(obj)
+                    if h:
                         base_stride = hash_to_stride.get(h, 40)
                         stride, filename, section_name = 0, "", ""
                         if use_delta:
@@ -823,7 +859,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                             stride = base_stride
 
                         if use_delta or use_packed:
-                            section_name = f"[Resource{h}Position100{slot}{res_suffix}]"
+                            section_name = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}{res_suffix}]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
                             filename = f"{folder_name}/{h}-Position{res_suffix}.buf"
                             if section_name not in sections and section_name not in generated_section_names:
@@ -831,7 +867,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                                 generated_section_names.add(section_name)
 
                         if use_packed:
-                            map_section = f"[Resource{h}Position100{slot}_Map]"
+                            map_section = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}_Map]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
                             if map_section not in sections and map_section not in generated_section_names:
                                 new_resource_lines.extend([map_section, "type = Buffer", "stride = 4", f"filename = {folder_name}/{h}-Position_map.buf", ""])
@@ -841,7 +877,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 sections[";; --- Generated Shape Key Buffers ---"] = new_resource_lines
 
             for h in unique_hashes:
-                for res_name in hash_to_base_resources.get(h, [f"Resource{h}Position"]):
+                for res_name in hash_to_base_resources.get(h, [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]):
                     if f"[{res_name}]" in sections and not any(f"[{res_name}_0]" in line for line in sections[f"[{res_name}]"]):
                         sections[f"[{res_name}]"].insert(0, f"[{res_name}_0]")
 

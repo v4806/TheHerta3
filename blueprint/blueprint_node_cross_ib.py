@@ -8,17 +8,13 @@ from .blueprint_node_base import SSMTNodeBase, SSMTSocketObject
 from ..config.main_config import GlobalConfig
 
 
-class CrossIBMatchModeEnum:
-    IB_HASH = 'IB_HASH'
-    IB_HASH_LABEL = '通过 IB Hash 识别'
-    
+class CrossIBMatchMode:
     INDEX_COUNT = 'INDEX_COUNT'
     INDEX_COUNT_LABEL = '通过 IndexCount 识别'
     
     @classmethod
     def get_items(cls):
         return [
-            (cls.IB_HASH, cls.IB_HASH_LABEL, "通过 DrawIB Hash 进行匹配"),
             (cls.INDEX_COUNT, cls.INDEX_COUNT_LABEL, "通过 match_index_count 参数进行匹配"),
         ]
 
@@ -186,8 +182,8 @@ class SSMTNode_CrossIB(SSMTNodeBase):
     match_mode: EnumProperty(
         name="识别模式",
         description="选择跨 IB 的识别模式",
-        items=CrossIBMatchModeEnum.get_items(),
-        default=CrossIBMatchModeEnum.IB_HASH,
+        items=CrossIBMatchMode.get_items(),
+        default=CrossIBMatchMode.INDEX_COUNT,
     )
     
     current_logic_name: StringProperty(
@@ -246,23 +242,13 @@ class SSMTNode_CrossIB(SSMTNodeBase):
             row.prop(self, "match_mode", text="识别模式")
         
         box = layout.box()
-        
-        if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-            box.label(text="跨IB映射列表 (源IB >> 目标IB)", icon='ARROW_LEFTRIGHT')
-        else:
-            box.label(text="跨IB映射列表 (源IndexCount >> 目标IndexCount)", icon='ARROW_LEFTRIGHT')
+        box.label(text="跨IB映射列表 (源IndexCount >> 目标IndexCount)", icon='ARROW_LEFTRIGHT')
         
         for i, item in enumerate(self.cross_ib_list):
             row = box.row(align=True)
-            
-            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-                row.prop(item, "source_ib", text="源")
-                row.label(text=">>")
-                row.prop(item, "target_ib", text="目标")
-            else:
-                row.prop(item, "source_index_count", text="源")
-                row.label(text=">>")
-                row.prop(item, "target_index_count", text="目标")
+            row.prop(item, "source_index_count", text="源")
+            row.label(text=">>")
+            row.prop(item, "target_index_count", text="目标")
             
             op = row.operator("ssmt.cross_ib_remove_item", text="", icon='X')
             op.node_name = self.name
@@ -282,68 +268,39 @@ class SSMTNode_CrossIB(SSMTNodeBase):
     def get_cross_ib_mappings(self):
         mappings = []
         for item in self.cross_ib_list:
-            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-                if item.source_ib and item.target_ib:
-                    mappings.append({
-                        'source_ib': item.source_ib,
-                        'target_ib': item.target_ib,
-                        'match_mode': self.match_mode
-                    })
-            else:
-                if item.source_index_count and item.target_index_count:
-                    mappings.append({
-                        'source_index_count': item.source_index_count,
-                        'target_index_count': item.target_index_count,
-                        'match_mode': self.match_mode
-                    })
+            if item.source_index_count and item.target_index_count:
+                mappings.append({
+                    'source_index_count': item.source_index_count,
+                    'target_index_count': item.target_index_count,
+                    'match_mode': self.match_mode
+                })
         return mappings
 
     def get_source_ib_list(self):
         source_list = []
         for item in self.cross_ib_list:
-            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-                if item.source_ib:
-                    source_list.append(item.source_ib)
-            else:
-                if item.source_index_count:
-                    source_list.append(item.source_index_count)
+            if item.source_index_count:
+                source_list.append(item.source_index_count)
         return list(set(source_list))
 
     def get_target_ib_list(self):
         target_list = []
         for item in self.cross_ib_list:
-            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-                if item.target_ib:
-                    target_list.append(item.target_ib)
-            else:
-                if item.target_index_count:
-                    target_list.append(item.target_index_count)
+            if item.target_index_count:
+                target_list.append(item.target_index_count)
         return list(set(target_list))
 
     def get_ib_mapping_dict(self):
         ib_mapping = {}
         for item in self.cross_ib_list:
-            if self.match_mode == CrossIBMatchModeEnum.IB_HASH:
-                if item.source_ib and item.target_ib:
-                    source_hash, source_first_index = CrossIBItem.parse_ib_with_first_index(item.source_ib)
-                    target_hash, target_first_index = CrossIBItem.parse_ib_with_first_index(item.target_ib)
-                    
-                    mapping_key = f"{source_hash}_{source_first_index}"
-                    if mapping_key not in ib_mapping:
-                        ib_mapping[mapping_key] = []
-                    
-                    target_key = f"{target_hash}_{target_first_index}"
-                    if target_key not in ib_mapping[mapping_key]:
-                        ib_mapping[mapping_key].append(target_key)
-            else:
-                if item.source_index_count and item.target_index_count:
-                    source_key = f"indexcount_{item.source_index_count}"
-                    if source_key not in ib_mapping:
-                        ib_mapping[source_key] = []
-                    
-                    target_key = f"indexcount_{item.target_index_count}"
-                    if target_key not in ib_mapping[source_key]:
-                        ib_mapping[source_key].append(target_key)
+            if item.source_index_count and item.target_index_count:
+                source_key = f"indexcount_{item.source_index_count}"
+                if source_key not in ib_mapping:
+                    ib_mapping[source_key] = []
+                
+                target_key = f"indexcount_{item.target_index_count}"
+                if target_key not in ib_mapping[source_key]:
+                    ib_mapping[source_key].append(target_key)
         return ib_mapping
 
     def get_match_mode(self):
