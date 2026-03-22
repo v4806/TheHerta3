@@ -111,38 +111,43 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 if filename: resource_map[section_name.strip('[]')] = os.path.join(base_path, filename.replace('/', os.sep))
         for section_name, lines in sections.items():
             if section_name.lower().startswith('[textureoverride'):
-                ib_line = next((l for l in lines if l.strip().lower().startswith('ib =')), None)
-                if not ib_line: continue
-                ib_resource_ref = ib_line.split('=', 1)[1].strip()
-                if ib_resource_ref.lower().startswith('ref '):
-                    ib_resource_name = ib_resource_ref[4:].strip()
-                else:
-                    ib_resource_name = ib_resource_ref
-                if ib_resource_name not in resource_map: continue
-                ib_path, current_mesh_name = resource_map[ib_resource_name], None
-                for line in lines:
+                current_mesh_name = None
+                for i, line in enumerate(lines):
                     stripped_line = line.strip()
                     mesh_match = re.search(r'\[mesh:([^\]]+)\]', stripped_line)
-                    if mesh_match: current_mesh_name = mesh_match.group(1).strip(); continue
+                    if mesh_match:
+                        current_mesh_name = mesh_match.group(1).strip()
+                        continue
                     if current_mesh_name:
                         lower_line = stripped_line.lower()
-                        if lower_line.startswith('drawindexed '):
-                            try:
-                                parts = [int(p.strip()) for p in stripped_line.split('=')[1].strip().split(',')]
-                                if len(parts) == 3:
-                                    draw_info[current_mesh_name] = {'draw_params': tuple(parts), 'ib_path': ib_path}
-                                current_mesh_name = None
-                            except (ValueError, IndexError): current_mesh_name = None
-                        elif lower_line.startswith('drawindexedinstanced '):
-                            try:
-                                parts = [p.strip() for p in stripped_line.split('=')[1].strip().split(',')]
-                                if len(parts) >= 5:
-                                    index_count = int(parts[0])
-                                    start_index_location = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
-                                    base_vertex_location = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
-                                    draw_info[current_mesh_name] = {'draw_params': (index_count, start_index_location, base_vertex_location), 'ib_path': ib_path}
-                                current_mesh_name = None
-                            except (ValueError, IndexError): current_mesh_name = None
+                        if lower_line.startswith('drawindexed ') or lower_line.startswith('drawindexedinstanced '):
+                            ib_path = None
+                            for j in range(i, -1, -1):
+                                prev_line = lines[j].strip().lower()
+                                if prev_line.startswith('ib ='):
+                                    ib_resource_ref = lines[j].strip().split('=', 1)[1].strip()
+                                    if ib_resource_ref.lower().startswith('ref '):
+                                        ib_resource_name = ib_resource_ref[4:].strip()
+                                    else:
+                                        ib_resource_name = ib_resource_ref
+                                    if ib_resource_name in resource_map:
+                                        ib_path = resource_map[ib_resource_name]
+                                    break
+                            if ib_path:
+                                try:
+                                    if lower_line.startswith('drawindexed '):
+                                        parts = [int(p.strip()) for p in stripped_line.split('=')[1].strip().split(',')]
+                                        if len(parts) == 3:
+                                            draw_info[current_mesh_name] = {'draw_params': tuple(parts), 'ib_path': ib_path}
+                                    else:
+                                        parts = [p.strip() for p in stripped_line.split('=')[1].strip().split(',')]
+                                        if len(parts) >= 5:
+                                            index_count = int(parts[0])
+                                            start_index_location = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
+                                            base_vertex_location = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
+                                            draw_info[current_mesh_name] = {'draw_params': (index_count, start_index_location, base_vertex_location), 'ib_path': ib_path}
+                                except (ValueError, IndexError): pass
+                            current_mesh_name = None
         return draw_info
 
     def _calculate_vertex_range(self, ib_path, draw_params):
