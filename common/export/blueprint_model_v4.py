@@ -19,7 +19,7 @@ class BluePrintModel_V4:
         self.cross_ib_source_to_target_dict: dict = {}
         self.cross_ib_match_mode: str = 'IB_HASH'
         self.cross_ib_mapping_objects: dict = {}
-        self.cross_ib_mapping_vb_judge: dict = {}
+        self.cross_ib_vb_condition_mapping: dict = {}
 
     def _get_m_key_class(self):
         from ...base.m_key import M_Key
@@ -165,7 +165,12 @@ class BluePrintModel_V4:
             match_mode = getattr(unknown_node, 'get_match_mode', lambda: 'IB_HASH')()
             self.cross_ib_match_mode = match_mode
             
-            use_vb_judge = getattr(unknown_node, 'get_use_vb_judge', lambda: False)()
+            vb_condition_source = ""
+            vb_condition_target = ""
+            if hasattr(unknown_node, 'get_vb_condition_source'):
+                vb_condition_source = unknown_node.get_vb_condition_source()
+            if hasattr(unknown_node, 'get_vb_condition_target'):
+                vb_condition_target = unknown_node.get_vb_condition_target()
             
             if hasattr(unknown_node, 'get_ib_mapping_dict'):
                 ib_mapping = unknown_node.get_ib_mapping_dict()
@@ -188,7 +193,10 @@ class BluePrintModel_V4:
                                 self.cross_ib_source_to_target_dict[source_key].append(tk)
                         
                         mapping_key = (source_key, target_key)
-                        self.cross_ib_mapping_vb_judge[mapping_key] = use_vb_judge
+                        self.cross_ib_vb_condition_mapping[mapping_key] = {
+                            'source': vb_condition_source,
+                            'target': vb_condition_target
+                        }
             
             connected_objects = self._collect_cross_ib_objects(unknown_node)
             for obj_info in connected_objects:

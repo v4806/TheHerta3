@@ -186,10 +186,28 @@ class SSMTNode_CrossIB(SSMTNodeBase):
         default=CrossIBMatchMode.INDEX_COUNT,
     )
     
-    use_vb_judge: BoolProperty(
-        name="VB 判定",
-        description="启用VB判定方案，在配置生成时使用原始的if vs == 200 || vs == 201条件判断方案",
-        default=False
+    vb_slot_200: BoolProperty(
+        name="200",
+        description="源块 VB 槽位 200",
+        default=True
+    )
+    
+    vb_slot_201: BoolProperty(
+        name="201",
+        description="源块 VB 槽位 201",
+        default=True
+    )
+    
+    vb_slot_202: BoolProperty(
+        name="202",
+        description="目标块 VB 槽位 202",
+        default=True
+    )
+    
+    vb_slot_203: BoolProperty(
+        name="203",
+        description="目标块 VB 槽位 203",
+        default=True
     )
     
     current_logic_name: StringProperty(
@@ -247,8 +265,18 @@ class SSMTNode_CrossIB(SSMTNodeBase):
             row = layout.row()
             row.prop(self, "match_mode", text="识别模式")
             
-            row = layout.row()
-            row.prop(self, "use_vb_judge", text="VB 判定")
+            box_vb = layout.box()
+            box_vb.label(text="VB 槽位选项 (用于条件判断)", icon='CHECKBOX_HLT')
+            
+            row = box_vb.row()
+            row.label(text="源块:")
+            row.prop(self, "vb_slot_200", text="200")
+            row.prop(self, "vb_slot_201", text="201")
+            
+            row = box_vb.row()
+            row.label(text="目标块:")
+            row.prop(self, "vb_slot_202", text="202")
+            row.prop(self, "vb_slot_203", text="203")
         
         box = layout.box()
         box.label(text="跨IB映射列表 (源IndexCount >> 目标IndexCount)", icon='ARROW_LEFTRIGHT')
@@ -281,13 +309,41 @@ class SSMTNode_CrossIB(SSMTNodeBase):
                 mappings.append({
                     'source_index_count': item.source_index_count,
                     'target_index_count': item.target_index_count,
-                    'match_mode': self.match_mode,
-                    'use_vb_judge': self.use_vb_judge
+                    'match_mode': self.match_mode
                 })
         return mappings
 
-    def get_use_vb_judge(self):
-        return self.use_vb_judge
+    def get_vb_condition_source(self) -> str:
+        vb_slots = []
+        if self.vb_slot_200:
+            vb_slots.append("200")
+        if self.vb_slot_201:
+            vb_slots.append("201")
+        
+        if not vb_slots:
+            return "if vs == 200 || vs == 201"
+        
+        if len(vb_slots) == 1:
+            return f"if vs == {vb_slots[0]}"
+        
+        conditions = [f"vs == {slot}" for slot in vb_slots]
+        return "if " + " || ".join(conditions)
+
+    def get_vb_condition_target(self) -> str:
+        vb_slots = []
+        if self.vb_slot_202:
+            vb_slots.append("202")
+        if self.vb_slot_203:
+            vb_slots.append("203")
+        
+        if not vb_slots:
+            return "if vs == 202 || vs == 203"
+        
+        if len(vb_slots) == 1:
+            return f"if vs == {vb_slots[0]}"
+        
+        conditions = [f"vs == {slot}" for slot in vb_slots]
+        return "if " + " || ".join(conditions)
 
     def get_source_ib_list(self):
         source_list = []

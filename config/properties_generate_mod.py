@@ -129,19 +129,6 @@ class Properties_GenerateMod(bpy.types.PropertyGroup):
         '''
         return bpy.context.scene.properties_generate_mod.enable_performance_stats
 
-    use_vb_judge: bpy.props.BoolProperty(
-        name="VB 判定",
-        description="启用VB判定方案，在EFMI配置生成时使用原始的if vs == 200 || vs == 201条件判断方案",
-        default=False
-    ) # type: ignore
-
-    @classmethod
-    def use_vb_judge(cls):
-        '''
-        bpy.context.scene.properties_generate_mod.use_vb_judge
-        '''
-        return bpy.context.scene.properties_generate_mod.use_vb_judge
-
     preview_export_only: bpy.props.BoolProperty(
         name="配置表预导出",
         description="只生成 INI 配置文件，不处理文件、物体等。用于快速预览生成的配置内容",

@@ -97,11 +97,8 @@ class PanelBasicInformation(bpy.types.Panel):
 
         # 决定导入时是否调用法线贴图
         layout.prop(context.scene.properties_import_model, "use_normal_map")
-        
-        if GlobalConfig.logic_name == LogicName.EFMI:
-            layout.prop(context.scene.properties_generate_mod, "use_vb_judge")
 
-        
+
 
 
 def register():
