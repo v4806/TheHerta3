@@ -70,52 +70,56 @@ class SubMeshModel:
                     ObjBufferHelper.check_and_verify_attributes(obj=source_obj, d3d11_game_type=self.d3d11_game_type)
         
         index_offset = 0
-        submesh_temp_obj_list = []
-        temp_collection = None
+        submesh_obj_list = []
+        processed_obj_names = {}
         
         for draw_call_model in self.drawcall_model_list:
             source_obj = ObjUtils.get_obj_by_name(draw_call_model.obj_name)
             if source_obj is None:
                 continue
 
-            if temp_collection is None:
-                temp_collection = CollectionUtils.create_new_collection("TEMP_SUBMESH_COLLECTION_" + self.unique_str)
-                bpy.context.scene.collection.children.link(temp_collection)
-
-            temp_obj = ObjUtils.copy_object(
-                context=bpy.context,
-                obj=source_obj,
-                name=source_obj.name + "_temp",
-                collection=temp_collection
-            )
-
-            ObjUtils.triangulate_object(bpy.context, temp_obj)
-
-            draw_call_model.vertex_count = len(temp_obj.data.vertices)
-            draw_call_model.index_count = len(temp_obj.data.polygons) * 3
-            draw_call_model.index_offset = index_offset
-
-            index_offset += draw_call_model.index_count
+            draw_call_model.vertex_count = len(source_obj.data.vertices)
+            draw_call_model.index_count = len(source_obj.data.polygons) * 3
+            
+            if draw_call_model.obj_name in processed_obj_names:
+                draw_call_model.index_offset = processed_obj_names[draw_call_model.obj_name]
+            else:
+                draw_call_model.index_offset = index_offset
+                processed_obj_names[draw_call_model.obj_name] = index_offset
+                index_offset += draw_call_model.index_count
+                submesh_obj_list.append(source_obj)
 
             self.vertex_count += draw_call_model.vertex_count
             self.index_count += draw_call_model.index_count
 
-            submesh_temp_obj_list.append(temp_obj)
-
-        if not submesh_temp_obj_list:
+        if not submesh_obj_list:
             return
 
-        if submesh_temp_obj_list:
+        mesh_objects = [obj for obj in submesh_obj_list if obj and obj.type == 'MESH']
+        if not mesh_objects:
+            print(f"SubMeshModel 警告: {self.unique_str} 没有网格对象可处理")
+            return
+
+        should_delete_merged = False
+        submesh_merged_obj = None
+        
+        if len(mesh_objects) == 1:
+            submesh_merged_obj = mesh_objects[0]
+        else:
+            first_obj_name = mesh_objects[0].name
+            
             bpy.ops.object.select_all(action='DESELECT')
-            target_active = submesh_temp_obj_list[0]
-            target_active.select_set(True)
-            bpy.context.view_layer.objects.active = target_active
+            for obj in mesh_objects:
+                obj.select_set(True)
+            bpy.context.view_layer.objects.active = mesh_objects[0]
 
-        ObjUtils.join_objects(bpy.context, submesh_temp_obj_list)
+            ObjUtils.join_objects(bpy.context, mesh_objects)
 
-        submesh_merged_obj = submesh_temp_obj_list[0]
-        merged_obj_name = "TEMP_SUBMESH_MERGED_" + self.unique_str
-        ObjUtils.rename_object(submesh_merged_obj, merged_obj_name)
+            submesh_merged_obj = bpy.data.objects.get(first_obj_name)
+            if submesh_merged_obj is None:
+                print(f"SubMeshModel 错误: 合并后找不到对象 {first_obj_name}")
+                return
+            should_delete_merged = True
 
         if self.d3d11_game_type:
             obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11_game_type, obj_name=submesh_merged_obj.name)
@@ -132,10 +136,8 @@ class SubMeshModel:
             self.category_buffer_dict = obj_buffer_model.category_buffer_dict
             self.index_vertex_id_dict = obj_buffer_model.index_loop_id_dict
 
-        bpy.data.objects.remove(submesh_merged_obj, do_unlink=True)
-
-        if temp_collection:
-            bpy.context.scene.collection.children.unlink(temp_collection)
-            bpy.data.collections.remove(temp_collection)
-
-        print("SubMeshModel: " + self.unique_str + " 计算完成，临时对象已删除")
+        if should_delete_merged:
+            bpy.data.objects.remove(submesh_merged_obj, do_unlink=True)
+            print("SubMeshModel: " + self.unique_str + " 计算完成，合并对象已删除")
+        else:
+            print("SubMeshModel: " + self.unique_str + " 计算完成，单对象保留由清理流程处理")

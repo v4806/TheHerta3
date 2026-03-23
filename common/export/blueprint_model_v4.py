@@ -19,6 +19,7 @@ class BluePrintModel_V4:
         self.cross_ib_source_to_target_dict: dict = {}
         self.cross_ib_match_mode: str = 'IB_HASH'
         self.cross_ib_mapping_objects: dict = {}
+        self.cross_ib_mapping_vb_judge: dict = {}
 
     def _get_m_key_class(self):
         from ...base.m_key import M_Key
@@ -164,6 +165,8 @@ class BluePrintModel_V4:
             match_mode = getattr(unknown_node, 'get_match_mode', lambda: 'IB_HASH')()
             self.cross_ib_match_mode = match_mode
             
+            use_vb_judge = getattr(unknown_node, 'get_use_vb_judge', lambda: False)()
+            
             if hasattr(unknown_node, 'get_ib_mapping_dict'):
                 ib_mapping = unknown_node.get_ib_mapping_dict()
                 for source_key, target_key_list in ib_mapping.items():
@@ -183,6 +186,9 @@ class BluePrintModel_V4:
                         for tk in target_key_list:
                             if tk not in self.cross_ib_source_to_target_dict[source_key]:
                                 self.cross_ib_source_to_target_dict[source_key].append(tk)
+                        
+                        mapping_key = (source_key, target_key)
+                        self.cross_ib_mapping_vb_judge[mapping_key] = use_vb_judge
             
             connected_objects = self._collect_cross_ib_objects(unknown_node)
             for obj_info in connected_objects:

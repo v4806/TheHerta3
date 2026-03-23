@@ -138,14 +138,17 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                                     if lower_line.startswith('drawindexed '):
                                         parts = [int(p.strip()) for p in stripped_line.split('=')[1].strip().split(',')]
                                         if len(parts) == 3:
-                                            draw_info[current_mesh_name] = {'draw_params': tuple(parts), 'ib_path': ib_path}
+                                            info_item = {'draw_params': tuple(parts), 'ib_path': ib_path}
                                     else:
                                         parts = [p.strip() for p in stripped_line.split('=')[1].strip().split(',')]
                                         if len(parts) >= 5:
                                             index_count = int(parts[0])
                                             start_index_location = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
                                             base_vertex_location = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
-                                            draw_info[current_mesh_name] = {'draw_params': (index_count, start_index_location, base_vertex_location), 'ib_path': ib_path}
+                                            info_item = {'draw_params': (index_count, start_index_location, base_vertex_location), 'ib_path': ib_path}
+                                    if current_mesh_name not in draw_info:
+                                        draw_info[current_mesh_name] = []
+                                    draw_info[current_mesh_name].append(info_item)
                                 except (ValueError, IndexError): pass
                             current_mesh_name = None
         return draw_info
@@ -659,10 +662,20 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
 
             print("开始自动计算顶点索引范围...")
             draw_info_map = self._parse_ini_for_draw_info(sections, mod_export_path)
-            calculated_ranges = {
-                obj_name: self._calculate_vertex_range(draw_info_map[obj_name]['ib_path'], draw_info_map[obj_name]['draw_params'])
-                for obj_name in all_objects if obj_name in draw_info_map
-            }
+            calculated_ranges = {}
+            for obj_name in all_objects:
+                if obj_name not in draw_info_map:
+                    continue
+                info_list = draw_info_map[obj_name]
+                all_ranges = []
+                for info in info_list:
+                    start_v, end_v = self._calculate_vertex_range(info['ib_path'], info['draw_params'])
+                    if start_v is not None and end_v is not None:
+                        all_ranges.append((start_v, end_v))
+                if all_ranges:
+                    min_start = min(r[0] for r in all_ranges)
+                    max_end = max(r[1] for r in all_ranges)
+                    calculated_ranges[obj_name] = (min_start, max_end)
 
             dest_res_dir = os.path.join(mod_export_path, "res")
             os.makedirs(dest_res_dir, exist_ok=True)

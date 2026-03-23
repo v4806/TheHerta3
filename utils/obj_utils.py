@@ -46,11 +46,14 @@ def set_user_context(context, user_context):
     for object in user_context.selected_objects:
         try:
             select_object(object)
-        except ReferenceError as e:
+        except (ReferenceError, ValueError):
             pass
     if user_context.active_object:
-        set_active_object(context, user_context.active_object)
-        set_mode(context, user_context.mode)
+        try:
+            set_active_object(context, user_context.active_object)
+            set_mode(context, user_context.mode)
+        except (ReferenceError, ValueError):
+            pass
 
 
 
@@ -454,16 +457,29 @@ class ObjUtils:
         怪不得之前的思路做出来有毛病呢
         TODO 所以说后面WWMI的统计每个Component的顶点组部分得用这种join技术才行
         '''
-        if len(objects) == 1:
+        if len(objects) <= 1:
             return
+        
+        mesh_objects = [obj for obj in objects if obj and hasattr(obj, 'type') and obj.type == 'MESH']
+        if len(mesh_objects) < 2:
+            return
+        
         unused_meshes = []
-        with OpenObject(context, objects[0], mode='OBJECT'):
-            for obj in objects[1:]:
-                unused_meshes.append(obj.data)
-                select_object(obj)  
-                bpy.ops.object.join()
+        with OpenObject(context, mesh_objects[0], mode='OBJECT'):
+            for obj in mesh_objects[1:]:
+                try:
+                    if obj and obj.data:
+                        unused_meshes.append(obj.data)
+                        select_object(obj)
+                        bpy.ops.object.join()
+                except ReferenceError:
+                    pass
         for mesh in unused_meshes:
-            remove_mesh(mesh)
+            try:
+                if mesh:
+                    remove_mesh(mesh)
+            except ReferenceError:
+                pass
 
     @staticmethod
     def get_vertex_groups(obj):

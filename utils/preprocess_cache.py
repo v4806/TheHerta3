@@ -14,7 +14,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 @dataclass
 class ObjectFingerprint:
-    """物体指纹，用于检测物体是否变更"""
+    """物体指纹，用于检测物体是否变更
+    
+    当前检测的数据包括：
+    1. vertex_count: 顶点数量
+    2. vertex_hash: 顶点坐标数据的哈希值
+    3. edge_hash: 边缘数据哈希值（包括锐边、Freestyle标记）
+    4. face_hash: 面数据哈希值（包括顶点索引、平滑标记）
+    5. vertex_group_hash: 顶点组数据哈希值（名称、权重）
+    6. modifier_hash: 修改器状态哈希值（类型、参数）
+    7. shape_key_hash: 形态键状态哈希值（名称、值、数据）
+    8. transform_hash: 物体变换哈希值（位置、旋转、缩放）
+    9. armature_pose_hash: 骨骼姿势哈希值
+    10. mirror_workflow: 是否使用镜像工作流
+    11. uv_hash: UV 数据哈希值（UV坐标、UV层信息）
+    """
     vertex_count: int
     vertex_hash: str
     edge_hash: str
@@ -25,6 +39,7 @@ class ObjectFingerprint:
     transform_hash: str
     armature_pose_hash: str
     mirror_workflow: bool
+    uv_hash: str = ""
     
     def to_dict(self) -> dict:
         return asdict(self)
@@ -46,7 +61,8 @@ class ObjectFingerprint:
             self.shape_key_hash == other.shape_key_hash and
             self.transform_hash == other.transform_hash and
             self.armature_pose_hash == other.armature_pose_hash and
-            self.mirror_workflow == other.mirror_workflow
+            self.mirror_workflow == other.mirror_workflow and
+            self.uv_hash == other.uv_hash
         )
 
 
@@ -321,6 +337,43 @@ class FingerprintCalculator:
         pose_json = json.dumps(pose_data, sort_keys=True)
         return hashlib.md5(pose_json.encode()).hexdigest()
     
+    @staticmethod
+    def calculate_uv_hash(obj: bpy.types.Object) -> str:
+        """计算 UV 数据的哈希值
+        
+        检测内容包括：
+        - UV 层数量
+        - 每个 UV 层的名称
+        - UV 坐标数据
+        - UV 层的活跃状态
+        """
+        if obj.type != 'MESH' or not obj.data:
+            return ""
+        
+        mesh = obj.data
+        
+        if not mesh.uv_layers or len(mesh.uv_layers) == 0:
+            return ""
+        
+        uv_data = []
+        
+        for uv_layer in mesh.uv_layers:
+            layer_info = {
+                'name': uv_layer.name,
+                'active': uv_layer.active,
+                'active_render': uv_layer.active_render,
+            }
+            
+            if len(mesh.loops) > 0:
+                uv_coords = np.empty(len(mesh.loops) * 2, dtype=np.float32)
+                uv_layer.data.foreach_get('uv', uv_coords)
+                layer_info['data_hash'] = hashlib.md5(uv_coords.tobytes()).hexdigest()
+            
+            uv_data.append(layer_info)
+        
+        uv_json = json.dumps(uv_data, sort_keys=True)
+        return hashlib.md5(uv_json.encode()).hexdigest()
+    
     @classmethod
     def calculate_fingerprint(cls, obj: bpy.types.Object, mirror_workflow: bool = False) -> ObjectFingerprint:
         """计算物体的完整指纹（先收集数据，再并行计算哈希）"""
@@ -339,7 +392,8 @@ class FingerprintCalculator:
                 shape_key_hash="",
                 transform_hash="",
                 armature_pose_hash="",
-                mirror_workflow=mirror_workflow
+                mirror_workflow=mirror_workflow,
+                uv_hash=""
             )
         
         mesh = obj.data
@@ -518,6 +572,23 @@ class FingerprintCalculator:
                 
                 pose_data.append(armature_info)
         
+        # 收集 UV 数据
+        uv_data = []
+        if mesh.uv_layers and len(mesh.uv_layers) > 0:
+            for uv_layer in mesh.uv_layers:
+                layer_info = {
+                    'name': uv_layer.name,
+                    'active': uv_layer.active,
+                    'active_render': uv_layer.active_render,
+                }
+                
+                if len(mesh.loops) > 0:
+                    uv_coords = np.empty(len(mesh.loops) * 2, dtype=np.float32)
+                    uv_layer.data.foreach_get('uv', uv_coords)
+                    layer_info['data_hash'] = hashlib.md5(uv_coords.tobytes()).hexdigest()
+                
+                uv_data.append(layer_info)
+        
         collect_time = time.time() - start_collect
         print(f"[Fingerprint] 数据收集耗时: {collect_time:.3f}s")
         
@@ -555,6 +626,12 @@ class FingerprintCalculator:
             pose_json = json.dumps(pose_data, sort_keys=True)
             return hashlib.md5(pose_json.encode()).hexdigest()
         
+        def calculate_uv_hash():
+            if not uv_data:
+                return ""
+            uv_json = json.dumps(uv_data, sort_keys=True)
+            return hashlib.md5(uv_json.encode()).hexdigest()
+        
         # 使用多线程并行计算哈希值
         with ThreadPoolExecutor(max_workers=4) as executor:
             futures = {
@@ -563,7 +640,8 @@ class FingerprintCalculator:
                 executor.submit(calculate_modifier_hash): 'modifier',
                 executor.submit(calculate_shape_key_hash): 'shape_key',
                 executor.submit(calculate_transform_hash): 'transform',
-                executor.submit(calculate_armature_pose_hash): 'armature_pose'
+                executor.submit(calculate_armature_pose_hash): 'armature_pose',
+                executor.submit(calculate_uv_hash): 'uv'
             }
             
             results = {}
@@ -584,6 +662,7 @@ class FingerprintCalculator:
         shape_key_hash = results['shape_key']
         transform_hash = results['transform']
         armature_pose_hash = results['armature_pose']
+        uv_hash = results['uv']
         
         total_time = time.time() - start_total
         print(f"[Fingerprint] 总耗时: {total_time:.3f}s")
@@ -598,7 +677,8 @@ class FingerprintCalculator:
             shape_key_hash=shape_key_hash,
             transform_hash=transform_hash,
             armature_pose_hash=armature_pose_hash,
-            mirror_workflow=mirror_workflow
+            mirror_workflow=mirror_workflow,
+            uv_hash=uv_hash
         )
 
 

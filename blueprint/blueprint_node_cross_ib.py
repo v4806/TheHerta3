@@ -186,6 +186,12 @@ class SSMTNode_CrossIB(SSMTNodeBase):
         default=CrossIBMatchMode.INDEX_COUNT,
     )
     
+    use_vb_judge: BoolProperty(
+        name="VB 判定",
+        description="启用VB判定方案，在配置生成时使用原始的if vs == 200 || vs == 201条件判断方案",
+        default=False
+    )
+    
     current_logic_name: StringProperty(
         name="当前运行模式",
         description="当前游戏的运行模式",
@@ -240,6 +246,9 @@ class SSMTNode_CrossIB(SSMTNodeBase):
         if logic_name == "EFMI":
             row = layout.row()
             row.prop(self, "match_mode", text="识别模式")
+            
+            row = layout.row()
+            row.prop(self, "use_vb_judge", text="VB 判定")
         
         box = layout.box()
         box.label(text="跨IB映射列表 (源IndexCount >> 目标IndexCount)", icon='ARROW_LEFTRIGHT')
@@ -272,9 +281,13 @@ class SSMTNode_CrossIB(SSMTNodeBase):
                 mappings.append({
                     'source_index_count': item.source_index_count,
                     'target_index_count': item.target_index_count,
-                    'match_mode': self.match_mode
+                    'match_mode': self.match_mode,
+                    'use_vb_judge': self.use_vb_judge
                 })
         return mappings
+
+    def get_use_vb_judge(self):
+        return self.use_vb_judge
 
     def get_source_ib_list(self):
         source_list = []

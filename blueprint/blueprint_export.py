@@ -159,7 +159,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             
             copy_mapping = {}
             
-            if use_parallel and blend_file_saved and not blend_file_dirty and total_objects >= 4:
+            if use_parallel and blend_file_saved and not blend_file_dirty and total_objects >= 1:
                 print(f"[ParallelPreprocess] 启用并行预处理，物体数量: {total_objects}")
                 start_operation("ParallelPreprocess")
                 copy_mapping = self._parallel_preprocess(context, obj_node_mapping, mirror_workflow_enabled)
@@ -238,7 +238,8 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                 elif GlobalConfig.logic_name == LogicName.EFMI:
                     from ..games.efmi import ModModelEFMI
                     use_ssmt4 = Properties_ImportModel.use_ssmt4()
-                    migoto_mod_model = ModModelEFMI(skip_buffer_export=preview_export_only, use_ssmt4=use_ssmt4)
+                    use_vb_judge = Properties_GenerateMod.use_vb_judge()
+                    migoto_mod_model = ModModelEFMI(skip_buffer_export=preview_export_only, use_ssmt4=use_ssmt4, use_vb_judge=use_vb_judge)
                     migoto_mod_model.generate_unity_vs_config_ini()
 
                 # 终末地测试AEMI，到时候老外的EFMI发布之后，再开一套新逻辑兼容他们的，咱们用这个先测试
@@ -317,12 +318,15 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                         # 恢复节点/项目引用到原始物体
                         node_or_item.object_name = original_name
                         
-                        # 删除副本
+                        # 删除副本（可能已被 submesh_model 合并删除）
                         if copy_obj:
-                            mesh_data = copy_obj.data
-                            bpy.data.objects.remove(copy_obj, do_unlink=True)
-                            if mesh_data:
-                                bpy.data.meshes.remove(mesh_data, do_unlink=True)
+                            try:
+                                mesh_data = copy_obj.data
+                                bpy.data.objects.remove(copy_obj, do_unlink=True)
+                                if mesh_data:
+                                    bpy.data.meshes.remove(mesh_data, do_unlink=True)
+                            except (ReferenceError, ValueError):
+                                pass
                             
                     print(f"已清理 {len(copy_mapping)} 个三角化副本")
                     end_operation("CleanupCopies")

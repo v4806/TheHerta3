@@ -72,7 +72,7 @@ class ParallelPreprocessManager:
             self.temp_dir = tempfile.mkdtemp(prefix="ssmt_preprocess_")
             print(f"[ParallelPreprocess] 创建临时目录: {self.temp_dir}")
             
-            if len(object_names) <= 1:
+            if len(object_names) < 1:
                 print("[ParallelPreprocess] 物体数量不足，使用单进程模式")
                 return None
             
