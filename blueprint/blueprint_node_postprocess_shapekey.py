@@ -35,6 +35,11 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         description="不存储完整的顶点坐标，而是存储与基础模型的差值，进一步减小体积。需要 'numpy' 库。",
         default=True
     )
+    use_optimized_lookup: bpy.props.BoolProperty(
+        name="优化查找性能",
+        description="使用顶点FREQ索引缓冲区替代大量条件分支，显著提升GPU性能。需要 'numpy' 库。",
+        default=True
+    )
 
     name_mapping: bpy.props.StringProperty(
         name="名称映射",
@@ -74,6 +79,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
     def draw_buttons(self, context, layout):
         layout.prop(self, "use_packed_buffers")
         layout.prop(self, "store_deltas")
+        layout.prop(self, "use_optimized_lookup")
 
         if not NUMPY_AVAILABLE:
             layout.label(text="警告: 未安装numpy库，优化功能不可用", icon='ERROR')
@@ -181,6 +187,18 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             return match.group(1)
         return None
 
+    def _extract_hash_prefix(self, hash_val):
+        """从完整哈希值中提取前缀（用于数据文件分组）
+        
+        969152d4-15066-0 -> 969152d4
+        969152d4-4911-15066 -> 969152d4
+        cd884c0a-1008-0 -> cd884c0a
+        c3806ef1 -> c3806ef1
+        """
+        if hash_val:
+            return hash_val.split('-')[0]
+        return None
+
     def _hash_to_resource_prefix(self, h):
         """将哈希值转换为资源名称前缀格式
         
@@ -214,8 +232,10 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 if obj_name not in all_objects: all_objects.append(obj_name)
                 obj_hash = self._extract_hash_from_name(obj_name)
                 if obj_hash:
-                    if obj_hash not in hash_to_objects: hash_to_objects[obj_hash] = []
-                    if obj_name not in hash_to_objects[obj_hash]: hash_to_objects[obj_hash].append(obj_name)
+                    hash_prefix = self._extract_hash_prefix(obj_hash)
+                    if hash_prefix:
+                        if hash_prefix not in hash_to_objects: hash_to_objects[hash_prefix] = []
+                        if obj_name not in hash_to_objects[hash_prefix]: hash_to_objects[hash_prefix].append(obj_name)
         return slot_to_name_to_objects, list(hash_to_objects.keys()), hash_to_objects, all_objects
 
     @staticmethod
@@ -318,18 +338,19 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         for slot, names_data in slot_to_name_to_objects.items():
             for obj in [o for name, objs in names_data.items() for o in objs]:
                 h = self._extract_hash_from_name(obj)
-                if h: buffers_to_process.add((h, slot))
+                h_prefix = self._extract_hash_prefix(h) if h else None
+                if h_prefix: buffers_to_process.add((h_prefix, slot))
 
-        for h, slot in sorted(list(buffers_to_process)):
-            base_filename = f"{h}-Position.buf"
+        for h_prefix, slot in sorted(list(buffers_to_process)):
+            base_filename = f"{h_prefix}-Position.buf"
             base_path = os.path.join(mod_export_path, "Buffer0000", base_filename)
             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
             shapekey_path = os.path.join(mod_export_path, folder_name, base_filename)
             output_dir = os.path.join(mod_export_path, folder_name)
 
-            print(f"  处理槽位 {slot} (哈希: {h})...")
+            print(f"  处理槽位 {slot} (哈希前缀: {h_prefix})...")
             if not all(os.path.exists(p) for p in [base_path, shapekey_path]):
-                print(f"    -> 跳过：找不到基础或形态键文件 for hash {h}, slot {slot}")
+                print(f"    -> 跳过：找不到基础或形态键文件 for hash {h_prefix}, slot {slot}")
                 continue
             os.makedirs(output_dir, exist_ok=True)
 
@@ -344,13 +365,13 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 VERTEX_STRIDE, NUM_FLOATS_PER_VERTEX, num_vertices = self._detect_vertex_format(base_bytes, shapekey_bytes, struct_definition)
                 print(f"    -> 检测到格式: 步长={VERTEX_STRIDE}字节, 每顶点{NUM_FLOATS_PER_VERTEX}个float, 顶点数={num_vertices}")
 
-                if h not in hash_to_stride:
-                    hash_to_stride[h] = VERTEX_STRIDE
+                if h_prefix not in hash_to_stride:
+                    hash_to_stride[h_prefix] = VERTEX_STRIDE
 
                 base_data = np.frombuffer(base_bytes, dtype='f').reshape((num_vertices, NUM_FLOATS_PER_VERTEX))
                 shapekey_data = np.frombuffer(shapekey_bytes, dtype='f').reshape((num_vertices, NUM_FLOATS_PER_VERTEX))
 
-                output_prefix = os.path.join(output_dir, f"{h}-Position")
+                output_prefix = os.path.join(output_dir, f"{h_prefix}-Position")
 
                 if use_delta:
                     data_to_write = shapekey_data[:, :3] - base_data[:, :3]
@@ -495,8 +516,11 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         """获取着色器模板名称"""
         use_packed = self.use_packed_buffers
         use_delta = self.store_deltas
+        use_optimized = self.use_optimized_lookup
         
-        if use_delta and use_packed:
+        if use_optimized and use_delta and use_packed:
+            return "shapekey_anim_packed_delta_v4_optimized.hlsl"
+        elif use_delta and use_packed:
             return "shapekey_anim_packed_delta_v3.hlsl"
         elif use_delta:
             return "shapekey_anim_standard_delta_v3.hlsl"
@@ -525,7 +549,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         
         return "struct VertexAttributes {\n    float3 position;\n    float3 normal;\n    float4 tangent;\n};"
 
-    def _update_shader_file(self, shader_path, hash_slot_data, use_packed, use_delta, unique_names, unique_objects):
+    def _update_shader_file(self, shader_path, hash_slot_data, use_packed, use_delta, unique_names, unique_objects, use_optimized=False):
         """更新着色器文件"""
         try:
             with open(shader_path, 'r', encoding='utf-8') as f:
@@ -542,44 +566,66 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             for i, name in enumerate(unique_names):
                 define_lines.append(f"#define FREQ{i+1} IniParams[{self.INTENSITY_START_INDEX + i}].x // {name}")
             
-            define_lines.extend([f"\n// --- Per-Object Vertex Ranges ---\n// From index {self.VERTEX_RANGE_START_INDEX} onwards"])
-            for i, obj_name in enumerate(unique_objects):
-                start_idx = self.VERTEX_RANGE_START_INDEX + i * 2
-                define_lines.append(f"#define START{i+1} (uint)IniParams[{start_idx}].x // {obj_name}")
-                define_lines.append(f"#define END{i+1}   (uint)IniParams[{start_idx + 1}].x")
+            if not use_optimized:
+                define_lines.extend([f"\n// --- Per-Object Vertex Ranges ---\n// From index {self.VERTEX_RANGE_START_INDEX} onwards"])
+                for i, obj_name in enumerate(unique_objects):
+                    start_idx = self.VERTEX_RANGE_START_INDEX + i * 2
+                    define_lines.append(f"#define START{i+1} (uint)IniParams[{start_idx}].x // {obj_name}")
+                    define_lines.append(f"#define END{i+1}   (uint)IniParams[{start_idx + 1}].x")
             
             logic_lines = []
             
-            for slot_num, names_data in sorted(hash_slot_data.items()):
-                slot_index = slot_num - 1
-                is_first_if = True
-                
-                logic_lines.extend([f"    // --- Slot {slot_index} (t{51+slot_index}) ---", f"    float anim_weight_slot{slot_index} = 0.0;"])
-                for name, objects in names_data.items():
-                    for obj in objects:
-                        start_def, end_def = obj_to_range_defs[obj]
-                        if_cmd = "if" if is_first_if else "else if"
-                        logic_lines.append(f"    {if_cmd} (i >= {start_def} && i <= {end_def}) {{ anim_weight_slot{slot_index} = {name_to_freq_def[name]}; }} // Name: {name}")
-                        is_first_if = False
-                
-                logic_lines.extend([f"    if (anim_weight_slot{slot_index} > 1e-5)", "    {"])
-                
-                indent = "        "
-                read_idx = "i"
-                if use_packed:
-                    logic_lines.extend([f"        int packed_index = shapekey_maps[{slot_index}][i];", "        if (packed_index != -1)", "        {"])
-                    read_idx = "packed_index"
-                    indent = "            "
-                
-                if use_delta:
-                    calc_line = f"total_diff_position += shapekey_pos_deltas[{slot_index}][{read_idx}] * anim_weight_slot{slot_index};"
-                else: 
-                    calc_line = f"total_diff_position += (shapekeys[{slot_index}][{read_idx}].position - base[i].position) * anim_weight_slot{slot_index};"
+            if use_optimized:
+                logic_lines.append("    // Optimized: Direct FREQ index lookup instead of hundreds of if-else branches")
+                logic_lines.append(f"    uint num_slots = {max(hash_slot_data.keys()) if hash_slot_data else 0};")
+                for slot_num, names_data in sorted(hash_slot_data.items()):
+                    slot_index = slot_num - 1
+                    logic_lines.extend([f"    // --- Slot {slot_index} (t{51+slot_index}) ---"])
+                    logic_lines.append(f"    uint packed_idx_slot{slot_index} = i * num_slots + {slot_index};")
+                    logic_lines.append(f"    uint freq_idx_slot{slot_index} = vertex_freq_indices[packed_idx_slot{slot_index}];")
+                    logic_lines.append(f"    if (freq_idx_slot{slot_index} != 255)")
+                    logic_lines.append("    {")
+                    logic_lines.append(f"        float anim_weight_slot{slot_index} = IniParams[{self.INTENSITY_START_INDEX} + freq_idx_slot{slot_index}].x;")
+                    
+                    if use_packed:
+                        logic_lines.extend([f"        int packed_index = shapekey_maps[{slot_index}][i];", "        if (packed_index != -1)", "        {"])
+                        logic_lines.append(f"            total_diff_position += shapekey_pos_deltas[{slot_index}][packed_index] * anim_weight_slot{slot_index};")
+                        logic_lines.append("        }")
+                    else:
+                        logic_lines.append(f"        total_diff_position += shapekey_pos_deltas[{slot_index}][i] * anim_weight_slot{slot_index};")
+                    
+                    logic_lines.append("    }")
+            else:
+                for slot_num, names_data in sorted(hash_slot_data.items()):
+                    slot_index = slot_num - 1
+                    is_first_if = True
+                    
+                    logic_lines.extend([f"    // --- Slot {slot_index} (t{51+slot_index}) ---", f"    float anim_weight_slot{slot_index} = 0.0;"])
+                    for name, objects in names_data.items():
+                        for obj in objects:
+                            start_def, end_def = obj_to_range_defs[obj]
+                            if_cmd = "if" if is_first_if else "else if"
+                            logic_lines.append(f"    {if_cmd} (i >= {start_def} && i <= {end_def}) {{ anim_weight_slot{slot_index} = {name_to_freq_def[name]}; }} // Name: {name}")
+                            is_first_if = False
+                    
+                    logic_lines.extend([f"    if (anim_weight_slot{slot_index} > 1e-5)", "    {"])
+                    
+                    indent = "        "
+                    read_idx = "i"
+                    if use_packed:
+                        logic_lines.extend([f"        int packed_index = shapekey_maps[{slot_index}][i];", "        if (packed_index != -1)", "        {"])
+                        read_idx = "packed_index"
+                        indent = "            "
+                    
+                    if use_delta:
+                        calc_line = f"total_diff_position += shapekey_pos_deltas[{slot_index}][{read_idx}] * anim_weight_slot{slot_index};"
+                    else: 
+                        calc_line = f"total_diff_position += (shapekeys[{slot_index}][{read_idx}].position - base[i].position) * anim_weight_slot{slot_index};"
 
-                logic_lines.append(indent + calc_line)
+                    logic_lines.append(indent + calc_line)
 
-                if use_packed: logic_lines.extend(["        }", "    }\n"])
-                else: logic_lines.extend(["    }\n"])
+                    if use_packed: logic_lines.extend(["        }", "    }\n"])
+                    else: logic_lines.extend(["    }\n"])
 
             content = re.sub(r"// --- \[PYTHON-MANAGED BLOCK START\] ---.*?// --- \[PYTHON-MANAGED BLOCK END\] ---",
                              f"// --- [PYTHON-MANAGED BLOCK START] ---\n{chr(10).join(define_lines)}\n// --- [PYTHON-MANAGED BLOCK END] ---",
@@ -591,7 +637,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             with open(shader_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             
-            mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}"
+            mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}, 优化查找:{'是' if use_optimized else '否'}"
             print(f"成功更新着色器 ({mode_str})，支持 {len(hash_slot_data)} 个槽位。")
             return True
         except Exception as e:
@@ -599,6 +645,98 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             import traceback
             traceback.print_exc()
             return False
+
+    def _generate_vertex_freq_index_buffers(self, mod_export_path, hash_val, hash_slot_data, unique_names, vertex_count, calculated_ranges):
+        """生成顶点FREQ索引缓冲区（打包格式）
+        
+        生成一个打包缓冲区，存储所有slot的FREQ索引：
+        - 布局: [vertex0_slot0, vertex0_slot1, ..., vertex0_slotN, vertex1_slot0, ...]
+        - 每个元素: uint8 (0-11 for FREQ index, 255 for no animation)
+        - 总大小: vertex_count * num_slots 字节
+        
+        支持同一个IB下多个物体拥有不同形态键的情况：
+        - 根据每个物体的顶点范围（start_v, end_v）来设置对应的FREQ值
+        """
+        if not NUMPY_AVAILABLE:
+            print("Numpy库未找到，无法生成FREQ索引缓冲区")
+            return False
+        
+        name_to_freq_index = {name: i for i, name in enumerate(unique_names)}
+        print(f"    [DEBUG] 形态键到FREQ索引映射: {name_to_freq_index}")
+        print(f"    [DEBUG] calculated_ranges 键: {list(calculated_ranges.keys())}")
+        
+        num_slots = max(hash_slot_data.keys()) if hash_slot_data else 0
+        
+        freq_indices = np.full(vertex_count * num_slots, 255, dtype=np.uint32)
+        
+        for slot_num, names_data in hash_slot_data.items():
+            slot_index = slot_num - 1
+            
+            slot_map_files = {}
+            for name, objects in names_data.items():
+                for obj_name in objects:
+                    obj_hash = self._extract_hash_from_name(obj_name)
+                    obj_prefix = self._extract_hash_prefix(obj_hash) if obj_hash else None
+                    if obj_prefix:
+                        map_path = os.path.join(mod_export_path, f"Buffer100{slot_num}" if slot_num < 10 else f"Buffer10{slot_num}", f"{obj_prefix}-Position_map.buf")
+                        if os.path.exists(map_path) and obj_prefix not in slot_map_files:
+                            try:
+                                with open(map_path, 'rb') as f:
+                                    slot_map_files[obj_prefix] = np.frombuffer(f.read(), dtype=np.int32)
+                            except Exception as e:
+                                print(f"    读取映射文件失败: {e}")
+            
+            print(f"    [DEBUG] Slot {slot_num}: 处理 {len(names_data)} 个形态键, 找到 {len(slot_map_files)} 个映射文件")
+            for name, objects in names_data.items():
+                freq_idx = name_to_freq_index.get(name, 255)
+                print(f"      [DEBUG] 形态键 '{name}' -> FREQ索引 {freq_idx}, 物体: {objects}")
+                if freq_idx == 255:
+                    continue
+                
+                for obj_name in objects:
+                    obj_hash = self._extract_hash_from_name(obj_name)
+                    obj_prefix = self._extract_hash_prefix(obj_hash) if obj_hash else None
+                    if obj_prefix != hash_val:
+                        print(f"        [DEBUG] 跳过物体 '{obj_name}' (前缀不匹配: {obj_prefix} != {hash_val})")
+                        continue
+                    
+                    if obj_name not in calculated_ranges:
+                        print(f"        [DEBUG] 物体 '{obj_name}' 不在 calculated_ranges 中")
+                        continue
+                    
+                    start_v, end_v = calculated_ranges[obj_name]
+                    if start_v is None or end_v is None:
+                        print(f"        [DEBUG] 物体 '{obj_name}' 范围无效: {start_v}-{end_v}")
+                        continue
+                    
+                    start_v = max(0, min(start_v, vertex_count - 1))
+                    end_v = max(0, min(end_v, vertex_count - 1))
+                    print(f"        [DEBUG] 物体 '{obj_name}' 设置顶点 {start_v}-{end_v} 为 FREQ索引 {freq_idx}")
+                    
+                    index_map = slot_map_files.get(obj_prefix)
+                    if index_map is not None:
+                        for v in range(start_v, end_v + 1):
+                            if v < len(index_map) and index_map[v] >= 0:
+                                packed_idx = v * num_slots + slot_index
+                                freq_indices[packed_idx] = freq_idx
+                    else:
+                        for v in range(start_v, end_v + 1):
+                            packed_idx = v * num_slots + slot_index
+                            freq_indices[packed_idx] = freq_idx
+                        print(f"        [DEBUG] 物体 '{obj_name}' 没有映射文件，直接设置所有顶点")
+        
+        output_dir = os.path.join(mod_export_path, "Buffer0000")
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{hash_val}-Position_freq_indices.buf")
+        
+        with open(output_path, 'wb') as f:
+            f.write(freq_indices.tobytes())
+        
+        unique_values = np.unique(freq_indices)
+        print(f"    生成FREQ索引缓冲区: {os.path.basename(output_path)} (顶点数: {vertex_count}, 槽位数: {num_slots})")
+        print(f"    [DEBUG] FREQ索引值分布: {dict(zip(*np.unique(freq_indices, return_counts=True)))}")
+        
+        return num_slots
 
     def execute_postprocess(self, mod_export_path):
         print(f"形态键配置后处理节点开始执行，Mod导出路径: {mod_export_path}")
@@ -616,8 +754,9 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         target_ini_file = ini_files[0]
         use_packed = self.use_packed_buffers
         use_delta = self.store_deltas
+        use_optimized = self.use_optimized_lookup
         
-        if (use_packed or use_delta) and not NUMPY_AVAILABLE:
+        if (use_packed or use_delta or use_optimized) and not NUMPY_AVAILABLE:
             print("Numpy库未找到，无法使用优化功能")
             return
 
@@ -653,9 +792,11 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 if match:
                     full_name, hash_val, number = match.groups()
                     hash_val_normalized = hash_val.replace('_', '-')
-                    if hash_val_normalized not in hash_to_base_resources:
-                        hash_to_base_resources[hash_val_normalized] = []
-                    hash_to_base_resources[hash_val_normalized].append((int(number) if number else 1, full_name))
+                    hash_prefix = self._extract_hash_prefix(hash_val_normalized)
+                    if hash_prefix and hash_prefix not in hash_to_base_resources:
+                        hash_to_base_resources[hash_prefix] = []
+                    if hash_prefix:
+                        hash_to_base_resources[hash_prefix].append((int(number) if number else 1, full_name))
             for hash_val in hash_to_base_resources:
                 hash_to_base_resources[hash_val].sort()
                 hash_to_base_resources[hash_val] = [name for key, name in hash_to_base_resources[hash_val]]
@@ -676,6 +817,20 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     min_start = min(r[0] for r in all_ranges)
                     max_end = max(r[1] for r in all_ranges)
                     calculated_ranges[obj_name] = (min_start, max_end)
+
+            vertex_counts = {}
+            for s, ls in sections.items():
+                m = re.match(r'\[TextureOverride_([a-f0-9]{8}(?:[_-][a-f0-9]+)*)_[^_]*_VertexLimitRaise\]', s)
+                if m:
+                    for l in ls:
+                        if l.strip().startswith('override_vertex_count'):
+                            try:
+                                hash_val = m.group(1).replace('_', '-')
+                                hash_prefix = self._extract_hash_prefix(hash_val)
+                                if hash_prefix:
+                                    vertex_counts[hash_prefix] = int(l.split('=')[1].strip())
+                            except (ValueError, IndexError):
+                                pass
 
             dest_res_dir = os.path.join(mod_export_path, "res")
             os.makedirs(dest_res_dir, exist_ok=True)
@@ -701,20 +856,12 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     hash_unique_names = list(OrderedDict.fromkeys(name for slot_data in hash_slot_data.values() for name in slot_data.keys()))
                     hash_unique_objects = list(OrderedDict.fromkeys(obj for slot_data in hash_slot_data.values() for name_data in slot_data.values() for obj in name_data))
                     
-                    if not self._update_shader_file(hash_to_shader_paths[hash_val], hash_slot_data, use_packed, use_delta, hash_unique_names, hash_unique_objects):
+                    if use_optimized:
+                        vertex_count = vertex_counts.get(hash_val, 10000)
+                        self._generate_vertex_freq_index_buffers(mod_export_path, hash_val, hash_slot_data, hash_unique_names, vertex_count, calculated_ranges)
+                    
+                    if not self._update_shader_file(hash_to_shader_paths[hash_val], hash_slot_data, use_packed, use_delta, hash_unique_names, hash_unique_objects, use_optimized):
                         print(f"更新哈希 {hash_val} 的着色器文件失败")
-
-            vertex_counts = {}
-            for s, ls in sections.items():
-                m = re.match(r'\[TextureOverride_([a-f0-9]{8}(?:[_-][a-f0-9]+)*)_[^_]*_VertexLimitRaise\]', s)
-                if m:
-                    for l in ls:
-                        if l.strip().startswith('override_vertex_count'):
-                            try:
-                                hash_val = m.group(1).replace('_', '-')
-                                vertex_counts[hash_val] = int(l.split('=')[1].strip())
-                            except (ValueError, IndexError):
-                                pass
             
             if '[Constants]' not in sections:
                 sections['[Constants]'] = []
@@ -786,10 +933,11 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 hash_slot_data = {}
                 for slot, name_data in slot_to_name_to_objects.items():
                     for name, objects in name_data.items():
-                        if any(obj in hash_objects for obj in objects):
+                        matching_objs = [obj for obj in objects if obj in hash_objects]
+                        if matching_objs:
                             if slot not in hash_slot_data:
                                 hash_slot_data[slot] = {}
-                            hash_slot_data[slot][name] = [obj for obj in objects if obj in hash_objects]
+                            hash_slot_data[slot][name] = matching_objs
 
                 if hash_slot_data:
                     hash_unique_names = list(OrderedDict.fromkeys(name for slot_data in hash_slot_data.values() for name in slot_data.keys()))
@@ -817,7 +965,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                                  "_pos_delta" if use_delta else \
                                  "_packed" if use_packed else ""
 
-                    mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}"
+                    mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}, 优化查找:{'是' if use_optimized else '否'}"
                     block_lines.append(f"\n    ; --- Binding Shape Key Buffers (Mode: {mode_str}) ---")
                     for slot in slots_for_hash:
                         res_name = f"Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}{res_suffix}"
@@ -831,6 +979,10 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                             map_reg = 75 + slot - 1
                             block_lines.append(f"    cs-t{map_reg} = copy Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}_Map")
                             t_registers_to_null.append(f"cs-t{map_reg}")
+                    
+                    if use_optimized:
+                        block_lines.append(f"    cs-t99 = copy Resource_{self._hash_to_resource_prefix(h)}_Position_FreqIndices")
+                        t_registers_to_null.append("cs-t99")
 
                     block_lines.append(f"    cs = ./res/shapekey_anim_{h}.hlsl")
 
@@ -863,8 +1015,9 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             for slot, names_data in slot_to_name_to_objects.items():
                 for obj in [o for name, objs in names_data.items() for o in objs]:
                     h = self._extract_hash_from_name(obj)
-                    if h:
-                        base_stride = hash_to_stride.get(h, 40)
+                    h_prefix = self._extract_hash_prefix(h) if h else None
+                    if h_prefix:
+                        base_stride = hash_to_stride.get(h_prefix, 40)
                         stride, filename, section_name = 0, "", ""
                         if use_delta:
                             res_suffix = "_packed_pos_delta" if use_packed else "_pos_delta"
@@ -877,19 +1030,26 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                             stride = base_stride
 
                         if use_delta or use_packed:
-                            section_name = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}{res_suffix}]"
+                            section_name = f"[Resource_{self._hash_to_resource_prefix(h_prefix)}_Position100{slot}{res_suffix}]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
-                            filename = f"{folder_name}/{h}-Position{res_suffix}.buf"
+                            filename = f"{folder_name}/{h_prefix}-Position{res_suffix}.buf"
                             if section_name not in sections and section_name not in generated_section_names:
                                 new_resource_lines.extend([section_name, "type = Buffer", f"stride = {stride}", f"filename = {filename}", ""])
                                 generated_section_names.add(section_name)
 
                         if use_packed:
-                            map_section = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}_Map]"
+                            map_section = f"[Resource_{self._hash_to_resource_prefix(h_prefix)}_Position100{slot}_Map]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
                             if map_section not in sections and map_section not in generated_section_names:
-                                new_resource_lines.extend([map_section, "type = Buffer", "stride = 4", f"filename = {folder_name}/{h}-Position_map.buf", ""])
+                                new_resource_lines.extend([map_section, "type = Buffer", "stride = 4", f"filename = {folder_name}/{h_prefix}-Position_map.buf", ""])
                                 generated_section_names.add(map_section)
+            
+            if use_optimized:
+                for h in unique_hashes:
+                    freq_idx_section = f"[Resource_{self._hash_to_resource_prefix(h)}_Position_FreqIndices]"
+                    if freq_idx_section not in sections and freq_idx_section not in generated_section_names:
+                        new_resource_lines.extend([freq_idx_section, "type = Buffer", "stride = 4", f"filename = Buffer0000/{h}-Position_freq_indices.buf", ""])
+                        generated_section_names.add(freq_idx_section)
 
             if new_resource_lines:
                 sections[";; --- Generated Shape Key Buffers ---"] = new_resource_lines
@@ -902,7 +1062,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             sections.update(compute_blocks_to_add)
             self._write_ordered_dict_to_ini(sections, target_ini_file, slider_panel_content)
 
-            mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}"
+            mode_str = f"紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'}, 优化查找:{'是' if use_optimized else '否'}"
             print(f"形态键配置({mode_str})已生成到 {os.path.basename(target_ini_file)}")
 
         except Exception as e:
