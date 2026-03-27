@@ -268,8 +268,15 @@ def mesh_triangulate_beauty(obj):
         bpy.ops.object.mode_set(mode='OBJECT')
         
         if obj.data.shape_keys and len(obj.data.shape_keys.key_blocks) > 0:
-            bpy.ops.object.shape_key_remove(all=True, apply_mix=True)
-            print(f"已将形态键变形效果烘焙到网格: {obj.name}")
+            try:
+                bpy.ops.object.shape_key_remove(all=True, apply_mix=True)
+                print(f"已将形态键变形效果烘焙到网格: {obj.name}")
+            except RuntimeError as e:
+                print(f"[mesh_triangulate_beauty] 删除形态键失败，尝试使用替代方法: {e}")
+                for i in range(len(obj.data.shape_keys.key_blocks) - 1, -1, -1):
+                    bpy.context.view_layer.objects.active = obj
+                    obj.active_shape_key_index = i
+                    bpy.ops.object.shape_key_remove(all=False)
         
     finally:
         if original_mode == 'EDIT':

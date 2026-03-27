@@ -99,7 +99,6 @@ class M_IniHelper:
         
         print("Generating Hash Style Texture INI...2")
 
-        # 先统计当前标记的具有Slot风格的Hash值，后续Render里搞图片的时候跳过这些
         slot_style_texture_hash_list = []
         for draw_ib_model in drawib_drawibmodel_dict.values():
             for texture_markup_info_list in draw_ib_model.import_config.partname_texturemarkinfolist_dict.values():
@@ -110,75 +109,94 @@ class M_IniHelper:
         print("slot_style_texture_hash_list:" + str(slot_style_texture_hash_list))
                     
         repeat_hash_list = []
-        # 遍历当前drawib的Render文件夹
         for draw_ib,draw_ib_model in drawib_drawibmodel_dict.items():
             print("Generating Hash Style Texture INI for DrawIB: " + draw_ib)
 
-            # SSMT4 模式下使用 unique_str，SSMT3 模式下使用 draw_ib
-            draw_ib_folder_key = getattr(draw_ib_model, 'unique_str', None)
-            if draw_ib_folder_key is None or draw_ib_folder_key == "":
-                draw_ib_folder_key = draw_ib
+            unique_str = getattr(draw_ib_model, 'unique_str', "")
             
-            hash_deduped_texture_info_dict = WorkSpaceHelper.get_hash_deduped_texture_info_dict(draw_ib=draw_ib_folder_key)
+            draw_ib_folder_keys = []
+            if unique_str:
+                workspace_folder = GlobalConfig.path_workspace_folder()
+                draw_ib_base = draw_ib.split("-")[0] if "-" in draw_ib else draw_ib
+                
+                try:
+                    all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
+                    ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib_base + "-")]
+                    draw_ib_folder_keys = ssmt4_folders if ssmt4_folders else [unique_str]
+                    print(f"调试: SSMT4 模式，找到的分块文件夹: {draw_ib_folder_keys}")
+                except Exception as e:
+                    print(f"调试: 查找 SSMT4 文件夹失败: {e}")
+                    draw_ib_folder_keys = [unique_str]
+            else:
+                draw_ib_folder_keys = [draw_ib]
+
+            for draw_ib_folder_key in draw_ib_folder_keys:
+                print(f"调试: 处理文件夹: {draw_ib_folder_key}")
+                
+                hash_deduped_texture_info_dict = WorkSpaceHelper.get_hash_deduped_texture_info_dict(draw_ib=draw_ib_folder_key)
+
+                for texture_markup_info_list in draw_ib_model.import_config.partname_texturemarkinfolist_dict.values():
+                    for texture_markup_info in texture_markup_info_list:
+                        if texture_markup_info.mark_type != "Hash":
+                            print("Skipping non-Hash style texture: " + texture_markup_info.mark_filename)
+                            continue
+
+                        if texture_markup_info.mark_hash in repeat_hash_list:
+                            print("Skipping repeated Hash style texture: " + texture_markup_info.mark_filename)
+                            continue
+                        else:
+                            repeat_hash_list.append(texture_markup_info.mark_hash)
+
+                        original_texture_file_path = os.path.join(
+                            GlobalConfig.path_workspace_folder(), 
+                            draw_ib_folder_key, 
+                            "TYPE_" + draw_ib_model.d3d11GameType.GameTypeName,
+                            texture_markup_info.mark_filename
+                        )
+                        print(f"调试: 查找贴图文件: {original_texture_file_path}")
+                        
+                        if not os.path.exists(original_texture_file_path):
+                            print("Skipping missing texture file: " + original_texture_file_path)
+                            continue
+
+                        hash_style_texture_filename = ""
+                        hash_style_texture_filename = hash_style_texture_filename + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_"
+
+                        deduped_texture_info = hash_deduped_texture_info_dict.get(texture_markup_info.mark_hash,None)
+                        if deduped_texture_info is None:
+                            print(f"警告: Hash值 {texture_markup_info.mark_hash} 在文件夹 {draw_ib_folder_key} 中未找到对应的贴图信息，跳过")
+                            continue
+
+                        component_count_list_str = deduped_texture_info.componet_count_list_str
+                        hash_style_texture_filename = hash_style_texture_filename + "_" + component_count_list_str + "_"
+                        hash_style_texture_filename = hash_style_texture_filename + deduped_texture_info.original_hash + "_" + deduped_texture_info.render_hash + "_" + deduped_texture_info.format + "_" + texture_markup_info.mark_name
+
+                        hash_style_texture_filename = hash_style_texture_filename + "." + texture_markup_info.mark_filename.split(".")[1]
+                        print(texture_markup_info.mark_filename)
+                        print(texture_markup_info.get_hash_style_filename())
 
 
-            # 添加标记的Hash风格贴图
-            for texture_markup_info_list in draw_ib_model.import_config.partname_texturemarkinfolist_dict.values():
-                for texture_markup_info in texture_markup_info_list:
-                    if texture_markup_info.mark_type != "Hash":
-                        print("Skipping non-Hash style texture: " + texture_markup_info.mark_filename)
-                        continue
-
-                    if texture_markup_info.mark_hash in repeat_hash_list:
-                        print("Skipping repeated Hash style texture: " + texture_markup_info.mark_filename)
-                        continue
-                    else:
-                        repeat_hash_list.append(texture_markup_info.mark_hash)
-
-                    original_texture_file_path = GlobalConfig.path_extract_gametype_folder(draw_ib=draw_ib_folder_key,gametype_name=draw_ib_model.d3d11GameType.GameTypeName) + texture_markup_info.mark_filename
-                    if not os.path.exists(original_texture_file_path):
-                        print("Skipping missing texture file: " + original_texture_file_path)
-                        continue
-
-                    hash_style_texture_filename = ""
-                    hash_style_texture_filename = hash_style_texture_filename + draw_ib + "_" + draw_ib_model.draw_ib_alias + "_"
-
-                    deduped_texture_info = hash_deduped_texture_info_dict.get(texture_markup_info.mark_hash,None)
-                    if deduped_texture_info is None:
-                        raise Fatal("在生成Mod的过程中，发现贴图标记的Hash值在提取的游戏类型文件夹中不存在对应的贴图文件，无法继续生成Mod，请检查工作空间内容与提取的游戏类型文件夹内容是否匹配，或者手动替换该贴图后再生成Mod。\n缺失贴图信息:\nDrawIB:" + draw_ib + "\n标记贴图文件名:" + texture_markup_info.mark_filename + "\n标记Hash值:" + texture_markup_info.mark_hash)
-
-                    component_count_list_str = deduped_texture_info.componet_count_list_str
-                    hash_style_texture_filename = hash_style_texture_filename + "_" + component_count_list_str + "_"
-                    hash_style_texture_filename = hash_style_texture_filename + deduped_texture_info.original_hash + "_" + deduped_texture_info.render_hash + "_" + deduped_texture_info.format + "_" + texture_markup_info.mark_name
-
-                    hash_style_texture_filename = hash_style_texture_filename + "." + texture_markup_info.mark_filename.split(".")[1]
-                    print(texture_markup_info.mark_filename)
-                    print(texture_markup_info.get_hash_style_filename())
 
 
+                        target_texture_file_path = GlobalConfig.path_generatemod_texture_folder(draw_ib=draw_ib_folder_key) + hash_style_texture_filename
+                        
+                        resource_and_textureoverride_texture_section = M_IniSection(M_SectionType.ResourceAndTextureOverride_Texture)
+                        resource_and_textureoverride_texture_section.append("[Resource_Texture_" + texture_markup_info.mark_hash + "]")
+                        resource_and_textureoverride_texture_section.append("filename = Texture/" + hash_style_texture_filename)
+                        resource_and_textureoverride_texture_section.new_line()
 
+                        resource_and_textureoverride_texture_section.append("[TextureOverride_" + texture_markup_info.mark_hash + "]")
+                        resource_and_textureoverride_texture_section.append("; " + texture_markup_info.mark_filename)
+                        resource_and_textureoverride_texture_section.append("hash = " + texture_markup_info.mark_hash)
+                        resource_and_textureoverride_texture_section.append("match_priority = 0")
+                        resource_and_textureoverride_texture_section.append("this = Resource_Texture_" + texture_markup_info.mark_hash)
+                        resource_and_textureoverride_texture_section.new_line()
 
-                    target_texture_file_path = GlobalConfig.path_generatemod_texture_folder(draw_ib=draw_ib_folder_key) + hash_style_texture_filename
-                    
-                    resource_and_textureoverride_texture_section = M_IniSection(M_SectionType.ResourceAndTextureOverride_Texture)
-                    resource_and_textureoverride_texture_section.append("[Resource_Texture_" + texture_markup_info.mark_hash + "]")
-                    resource_and_textureoverride_texture_section.append("filename = Texture/" + hash_style_texture_filename)
-                    resource_and_textureoverride_texture_section.new_line()
+                        ini_builder.append_section(resource_and_textureoverride_texture_section)
 
-                    resource_and_textureoverride_texture_section.append("[TextureOverride_" + texture_markup_info.mark_hash + "]")
-                    resource_and_textureoverride_texture_section.append("; " + texture_markup_info.mark_filename)
-                    resource_and_textureoverride_texture_section.append("hash = " + texture_markup_info.mark_hash)
-                    resource_and_textureoverride_texture_section.append("match_priority = 0")
-                    resource_and_textureoverride_texture_section.append("this = Resource_Texture_" + texture_markup_info.mark_hash)
-                    resource_and_textureoverride_texture_section.new_line()
+                        if not os.path.exists(target_texture_file_path):
+                            shutil.copy2(original_texture_file_path,target_texture_file_path)
 
-                    ini_builder.append_section(resource_and_textureoverride_texture_section)
-
-                    # copy only if target not exists avoid overwrite texture manually replaced by mod author.
-                    if not os.path.exists(target_texture_file_path):
-                        shutil.copy2(original_texture_file_path,target_texture_file_path)
-
-            # 现在除了WWMI外都不使用全局Hash贴图风格，而是上面的标记的Hash风格贴图
             if GlobalConfig.logic_name != LogicName.WWMI and GlobalConfig.logic_name != LogicName.WuWa:
                 continue
 

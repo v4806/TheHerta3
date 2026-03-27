@@ -1232,7 +1232,11 @@ class SSMTQuickPartialExport(bpy.types.Operator):
         
         print(f"[QuickExport] 开始快速局部导出，选中物体数量: {len(selected_objects)}")
         
-        GlobalConfig.read_from_main_json()
+        use_ssmt4 = Properties_ImportModel.use_ssmt4()
+        if use_ssmt4:
+            GlobalConfig.read_from_main_json_ssmt4()
+        else:
+            GlobalConfig.read_from_main_json()
         
         temp_tree_name = f"_QuickExport_Temp_{GlobalConfig.workspacename}" if GlobalConfig.workspacename else "_QuickExport_Temp"
         
@@ -1254,6 +1258,35 @@ class SSMTQuickPartialExport(bpy.types.Operator):
                 obj_node = temp_tree.nodes.new('SSMTNode_Object_Info')
                 obj_node.object_name = obj.name
                 obj_node.location = (0, y_offset)
+                
+                if use_ssmt4:
+                    obj_name = obj.name
+                    if "." in obj_name:
+                        obj_name_total_split = obj_name.split(".")
+                        obj_name_split = obj_name_total_split[0].split("-")
+                        
+                        if len(obj_name_split) >= 3:
+                            obj_node.draw_ib = obj_name_split[0]
+                            obj_node.index_count = obj_name_split[1]
+                            obj_node.first_index = obj_name_split[2]
+                        elif len(obj_name_split) >= 2:
+                            obj_node.draw_ib = obj_name_split[0]
+                            obj_node.index_count = obj_name_split[1]
+                        elif len(obj_name_split) >= 1:
+                            obj_node.draw_ib = obj_name_split[0]
+                        
+                        if len(obj_name_total_split) >= 2:
+                            obj_node.alias_name = ".".join(obj_name_total_split[1:])
+                    elif "-" in obj_name:
+                        obj_name_split = obj_name.split("-")
+                        obj_node.draw_ib = obj_name_split[0]
+                        if len(obj_name_split) >= 2:
+                            obj_node.index_count = obj_name_split[1]
+                        if len(obj_name_split) >= 3:
+                            obj_node.first_index = obj_name_split[2]
+                    
+                    print(f"[QuickExport] SSMT4模式，物体: {obj_name}, DrawIB: {obj_node.draw_ib}, IndexCount: {obj_node.index_count}")
+                
                 obj_nodes.append(obj_node)
                 y_offset -= 200
             

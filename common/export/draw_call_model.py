@@ -120,14 +120,28 @@ class DrawCallModel:
     index_count: int = field(init=False, repr=False, default=0)
     vertex_count: int = field(init=False, repr=False, default=0)
     index_offset: int = field(init=False, repr=False, default=0)
+    _skip_auto_parse: bool = field(init=False, repr=False, default=False)
 
     def __post_init__(self):
-        obj_rule_name = ObjRuleName(self.obj_name)
-        self.match_draw_ib = obj_rule_name.draw_ib
-        self.match_index_count = obj_rule_name.index_count
-        self.match_first_index = obj_rule_name.first_index
-        self.comment_alias_name = obj_rule_name.obj_alias_name
-        self.display_name = self.obj_name
+        if self._skip_auto_parse:
+            self.display_name = self.obj_name
+            return
+        try:
+            obj_rule_name = ObjRuleName(self.obj_name)
+            self.match_draw_ib = obj_rule_name.draw_ib
+            self.match_index_count = obj_rule_name.index_count
+            self.match_first_index = obj_rule_name.first_index
+            self.comment_alias_name = obj_rule_name.obj_alias_name
+            self.display_name = self.obj_name
+        except Exception as e:
+            print(f"[DrawCallModel] 物体名称解析失败: {self.obj_name}, 错误: {e}")
+            self.display_name = self.obj_name
+
+    def set_draw_info(self, draw_ib: str, index_count: str = "", first_index: str = "", alias_name: str = ""):
+        self.match_draw_ib = draw_ib
+        self.match_index_count = index_count
+        self.match_first_index = first_index
+        self.comment_alias_name = alias_name
     
     def get_unique_str(self) -> str:
         return self.match_draw_ib + "-" + self.match_index_count + "-" + self.match_first_index

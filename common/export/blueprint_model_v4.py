@@ -136,17 +136,33 @@ class BluePrintModel_V4:
             obj_model = DrawCallModel(obj_name=unknown_node.object_name)
             obj_model.condition = V4_Condition(work_key_list=copy.deepcopy(chain_key_list))
             
+            draw_ib = getattr(unknown_node, 'draw_ib', '')
+            index_count = getattr(unknown_node, 'index_count', '')
+            first_index = getattr(unknown_node, 'first_index', '')
+            alias_name = getattr(unknown_node, 'alias_name', '')
+            
+            if draw_ib:
+                obj_model.set_draw_info(draw_ib, index_count, first_index, alias_name)
+            
             if hasattr(unknown_node, 'original_object_name') and unknown_node.original_object_name:
                 obj_model.display_name = unknown_node.original_object_name
             
             self.ordered_draw_obj_data_model_list.append(obj_model)
-            print(f"BluePrintModel_V4: 解析 Object_Info 节点，物体: {unknown_node.object_name}")
+            print(f"BluePrintModel_V4: 解析 Object_Info 节点，物体: {unknown_node.object_name}, DrawIB: {draw_ib}, IndexCount: {index_count}")
 
         elif unknown_node.bl_idname == "SSMTNode_MultiFile_Export":
             if len(unknown_node.object_list) > 0:
                 first_item = unknown_node.object_list[0]
                 obj_model = DrawCallModel(obj_name=first_item.object_name)
                 obj_model.condition = V4_Condition(work_key_list=copy.deepcopy(chain_key_list))
+                
+                draw_ib = getattr(first_item, 'draw_ib', '')
+                index_count = getattr(first_item, 'index_count', '')
+                first_index = getattr(first_item, 'first_index', '')
+                alias_name = getattr(first_item, 'alias_name', '')
+                
+                if draw_ib:
+                    obj_model.set_draw_info(draw_ib, index_count, first_index, alias_name)
                 
                 if hasattr(first_item, 'original_object_name') and first_item.original_object_name:
                     obj_model.display_name = first_item.original_object_name
