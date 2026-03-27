@@ -334,16 +334,20 @@ class ModModelZZMI:
                                     if texture_markup_info.mark_type == "Slot":
                                         resource_name = texture_markup_info.get_resource_name()
                                         if resource_name not in added_texture_resources:
-                                            added_texture_resources.add(resource_name)
                                             if texture_markup_info.mark_name == "DiffuseMap":
+                                                added_texture_resources.add(resource_name)
                                                 texture_override_ib_section.append("Resource\\ZZMI\\Diffuse = ref " + resource_name)
                                             elif texture_markup_info.mark_name == "NormalMap":
+                                                added_texture_resources.add(resource_name)
                                                 texture_override_ib_section.append("Resource\\ZZMI\\NormalMap = ref " + resource_name)
                                             elif texture_markup_info.mark_name == "LightMap":
+                                                added_texture_resources.add(resource_name)
                                                 texture_override_ib_section.append("Resource\\ZZMI\\LightMap = ref " + resource_name)
                                             elif texture_markup_info.mark_name == "MaterialMap":
+                                                added_texture_resources.add(resource_name)
                                                 texture_override_ib_section.append("Resource\\ZZMI\\MaterialMap = ref " + resource_name)
                                             elif texture_markup_info.mark_name == "StockingMap":
+                                                added_texture_resources.add(resource_name)
                                                 texture_override_ib_section.append("Resource\\ZZMI\\WengineFx = ref " + resource_name)
                                 
                                 texture_override_ib_section.append("run = CommandList\\ZZMI\\SetTextures")
@@ -353,10 +357,7 @@ class ModModelZZMI:
                                         resource_name = texture_markup_info.get_resource_name()
                                         if resource_name not in added_texture_resources:
                                             added_texture_resources.add(resource_name)
-                                            if texture_markup_info.mark_name in ["DiffuseMap", "NormalMap", "LightMap", "MaterialMap", "StockingMap"]:
-                                                pass
-                                            else:
-                                                texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + resource_name)
+                                            texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + resource_name)
 
                                 texture_override_ib_section.append("run = CommandListSkinTexture")
                             else:
@@ -468,32 +469,43 @@ class ModModelZZMI:
                     if not Properties_GenerateMod.forbid_auto_texture_ini():
                         texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name,None)
                         if texture_markup_info_list is not None:
+                            added_texture_resources = set()
                             if Properties_GenerateMod.zzz_use_slot_fix():
                                 for texture_markup_info in texture_markup_info_list:
                                     if texture_markup_info.mark_type == "Slot":
-                                        if texture_markup_info.mark_name == "DiffuseMap":
-                                            texture_override_ib_section.append("Resource\\ZZMI\\Diffuse = ref " + texture_markup_info.get_resource_name())
-                                        elif texture_markup_info.mark_name == "NormalMap":
-                                            texture_override_ib_section.append("Resource\\ZZMI\\NormalMap = ref " + texture_markup_info.get_resource_name())
-                                        elif texture_markup_info.mark_name == "LightMap":
-                                            texture_override_ib_section.append("Resource\\ZZMI\\LightMap = ref " + texture_markup_info.get_resource_name())
-                                        elif texture_markup_info.mark_name == "MaterialMap":
-                                            texture_override_ib_section.append("Resource\\ZZMI\\MaterialMap = ref " + texture_markup_info.get_resource_name())
-                                        elif texture_markup_info.mark_name == "StockingMap":
-                                            texture_override_ib_section.append("Resource\\ZZMI\\WengineFx = ref " + texture_markup_info.get_resource_name())
+                                        resource_name = texture_markup_info.get_resource_name()
+                                        if resource_name not in added_texture_resources:
+                                            if texture_markup_info.mark_name == "DiffuseMap":
+                                                added_texture_resources.add(resource_name)
+                                                texture_override_ib_section.append("Resource\\ZZMI\\Diffuse = ref " + resource_name)
+                                            elif texture_markup_info.mark_name == "NormalMap":
+                                                added_texture_resources.add(resource_name)
+                                                texture_override_ib_section.append("Resource\\ZZMI\\NormalMap = ref " + resource_name)
+                                            elif texture_markup_info.mark_name == "LightMap":
+                                                added_texture_resources.add(resource_name)
+                                                texture_override_ib_section.append("Resource\\ZZMI\\LightMap = ref " + resource_name)
+                                            elif texture_markup_info.mark_name == "MaterialMap":
+                                                added_texture_resources.add(resource_name)
+                                                texture_override_ib_section.append("Resource\\ZZMI\\MaterialMap = ref " + resource_name)
+                                            elif texture_markup_info.mark_name == "StockingMap":
+                                                added_texture_resources.add(resource_name)
+                                                texture_override_ib_section.append("Resource\\ZZMI\\WengineFx = ref " + resource_name)
                             
                                 texture_override_ib_section.append("run = CommandList\\ZZMI\\SetTextures")
 
                                 for texture_markup_info in texture_markup_info_list:
                                     if texture_markup_info.mark_type == "Slot":
-                                        if texture_markup_info.mark_name in ["DiffuseMap", "NormalMap", "LightMap", "MaterialMap", "StockingMap"]:
-                                            pass
-                                        else:
-                                            texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
+                                        resource_name = texture_markup_info.get_resource_name()
+                                        if resource_name not in added_texture_resources:
+                                            added_texture_resources.add(resource_name)
+                                            texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + resource_name)
                             else:
                                 for texture_markup_info in texture_markup_info_list:
                                     if texture_markup_info.mark_type == "Slot":
-                                        texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + texture_markup_info.get_resource_name())
+                                        resource_name = texture_markup_info.get_resource_name()
+                                        if resource_name not in added_texture_resources:
+                                            added_texture_resources.add(resource_name)
+                                            texture_override_ib_section.append(self.vlr_filter_index_indent + texture_markup_info.mark_slot + " = " + resource_name)
 
                     texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(part_name,None)
                     if texture_markup_info_list is not None:
