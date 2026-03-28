@@ -299,17 +299,17 @@ class ModModelZZMI:
                             first_obj = component_model.final_ordered_draw_obj_model_list[0]
                             
                             if unique_str:
-                                texture_lookup_key = f"{draw_ib}-{first_obj.index_count}-{first_obj.first_index}"
+                                texture_lookup_key = f"{draw_ib}-{first_obj.match_index_count}-{first_obj.match_first_index}"
                                 print(f"调试: SSMT4 模式，构建查找 key: {texture_lookup_key}")
                                 
                                 if texture_lookup_key not in draw_ib_model.import_config.partname_texturemarkinfolist_dict:
                                     for key in draw_ib_model.import_config.partname_texturemarkinfolist_dict.keys():
-                                        if key.startswith(draw_ib + "-") and str(first_obj.first_index) in key:
+                                        if key.startswith(draw_ib + "-") and str(first_obj.match_first_index) in key:
                                             texture_lookup_key = key
                                             print(f"调试: 使用模糊匹配找到 key: {texture_lookup_key}")
                                             break
                             else:
-                                texture_lookup_key = f"{first_obj.draw_ib}-{first_obj.index_count}-{first_obj.first_index}"
+                                texture_lookup_key = f"{first_obj.match_draw_ib}-{first_obj.match_index_count}-{first_obj.match_first_index}"
                                 print(f"调试: SSMT3 模式，构建查找 key: {texture_lookup_key}")
                             
                             print(f"调试: is_ssmt4={first_obj.is_ssmt4}")

@@ -275,7 +275,7 @@ class ModModelHIMI:
                         texture_markup_info_list = None
                         if component_model.final_ordered_draw_obj_model_list:
                             first_obj = component_model.final_ordered_draw_obj_model_list[0]
-                            obj_full_name = f"{first_obj.draw_ib}-{first_obj.index_count}-{first_obj.first_index}"
+                            obj_full_name = f"{first_obj.match_draw_ib}-{first_obj.match_index_count}-{first_obj.match_first_index}"
                             print(f"调试: obj_full_name={obj_full_name}, is_ssmt4={first_obj.is_ssmt4}")
                             print(f"调试: partname_texturemarkinfolist_dict keys={list(draw_ib_model.import_config.partname_texturemarkinfolist_dict.keys())}")
                             texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(obj_full_name, None)
@@ -580,7 +580,7 @@ class ModModelHIMI:
                         texture_markup_info_list = None
                         if component_model.final_ordered_draw_obj_model_list:
                             first_obj = component_model.final_ordered_draw_obj_model_list[0]
-                            obj_full_name = f"{first_obj.draw_ib}-{first_obj.index_count}-{first_obj.first_index}"
+                            obj_full_name = f"{first_obj.match_draw_ib}-{first_obj.match_index_count}-{first_obj.match_first_index}"
                             texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(obj_full_name, None)
                         if texture_markup_info_list is None:
                             texture_markup_info_list = draw_ib_model.import_config.partname_texturemarkinfolist_dict.get(component_index, None)

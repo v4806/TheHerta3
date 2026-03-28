@@ -496,10 +496,12 @@ class SSMT_OT_View_Group_Objects(bpy.types.Operator):
              return {'CANCELLED'}
 
         view_3d_area = None
+        view_3d_window = None
         active_window = context.window
         for area in active_window.screen.areas:
             if area.type == 'VIEW_3D':
                 view_3d_area = area
+                view_3d_window = active_window
                 break
         
         if not view_3d_area:
@@ -509,6 +511,7 @@ class SSMT_OT_View_Group_Objects(bpy.types.Operator):
                 for area in window.screen.areas:
                     if area.type == 'VIEW_3D':
                         view_3d_area = area
+                        view_3d_window = window
                         break
                 if view_3d_area:
                     break
@@ -525,7 +528,7 @@ class SSMT_OT_View_Group_Objects(bpy.types.Operator):
         
         if in_local_view:
             try:
-                with context.temp_override(window=active_window, area=view_3d_area):
+                with context.temp_override(window=view_3d_window, area=view_3d_area):
                     bpy.ops.view3d.localview()
                 self.report({'INFO'}, "Exited local view")
             except TypeError:
@@ -583,7 +586,7 @@ class SSMT_OT_View_Group_Objects(bpy.types.Operator):
         region = next((r for r in view_3d_area.regions if r.type == 'WINDOW'), None)
         if region:
             try:
-                with context.temp_override(window=active_window, area=view_3d_area, region=region):
+                with context.temp_override(window=view_3d_window, area=view_3d_area, region=region):
                     bpy.ops.view3d.localview()
                     bpy.ops.view3d.view_axis(type='FRONT')
                     bpy.ops.view3d.view_selected()
