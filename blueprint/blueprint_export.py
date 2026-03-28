@@ -145,13 +145,27 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         else:
             if use_parallel:
                 if not blend_file_saved:
-                    self.report({'ERROR'}, "并行导出需要先保存项目文件")
-                    end_operation("GenerateMod_Total")
-                    return {'CANCELLED'}
-                if blend_file_dirty:
-                    self.report({'ERROR'}, "项目有未保存的修改，请先保存后再进行并行导出")
-                    end_operation("GenerateMod_Total")
-                    return {'CANCELLED'}
+                    print("[ParallelPreprocess] 工程未保存，自动保存工程...")
+                    try:
+                        bpy.ops.wm.save_mainfile()
+                        blend_file_saved = True
+                        blend_file_dirty = False
+                        blend_file = bpy.data.filepath
+                        print(f"[ParallelPreprocess] 工程已保存: {blend_file}")
+                    except Exception as e:
+                        self.report({'ERROR'}, f"自动保存工程失败: {e}")
+                        end_operation("GenerateMod_Total")
+                        return {'CANCELLED'}
+                elif blend_file_dirty:
+                    print("[ParallelPreprocess] 工程有未保存的修改，自动保存工程...")
+                    try:
+                        bpy.ops.wm.save_mainfile()
+                        blend_file_dirty = False
+                        print(f"[ParallelPreprocess] 工程已保存: {blend_file}")
+                    except Exception as e:
+                        self.report({'ERROR'}, f"自动保存工程失败: {e}")
+                        end_operation("GenerateMod_Total")
+                        return {'CANCELLED'}
             
             wm.progress_begin(0, 100)
             wm.progress_update(0)

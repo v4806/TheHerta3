@@ -52,12 +52,13 @@ from .config import properties_generate_mod
 from .config import properties_wwmi
 from .config import properties_extract_model
 from .config.plugin_config import PluginConfig
+from .config import version_config
 
 bl_info = {
     "name": "TheHerta3",
     "description": "SSMT3.0 Series's Blender Plugin.",
     "blender": (4, 5, 0),
-    "version": (3, 8, 6),
+    "version": (3, 9, 0),
     "location": "View3D",
     "min_ssmt_version": 361,
     "category": "Generic"
@@ -142,6 +143,7 @@ class HertaUpdatePreference(bpy.types.AddonPreferences):
 
 def register():
     # 1. Configs
+    version_config.register()
     properties_import_model.register()
     properties_wwmi.register()
     properties_generate_mod.register()
@@ -228,6 +230,7 @@ def unregister():
     properties_generate_mod.unregister()
     properties_wwmi.unregister()
     properties_import_model.unregister()
+    version_config.unregister()
 
 
 

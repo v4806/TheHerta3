@@ -18,92 +18,7 @@ from ..common.m_ini_helper_gui import M_IniHelperGUI
 
 from ..utils.json_utils import JsonUtils
 from ..utils.config_utils import ConfigUtils
-
-
-def check_and_try_generate_import_json_for_ssmt4() -> dict:
-    '''
-    检查 Import.json 是否存在，如果不存在则尝试自动生成
-    返回 draw_ib_gametypename_dict
-    '''
-    workspace_import_json_path = os.path.join(GlobalConfig.path_workspace_folder(), "Import.json")
-    
-    if os.path.exists(workspace_import_json_path):
-        return JsonUtils.LoadFromFile(workspace_import_json_path)
-    
-    print("Import.json 不存在，尝试自动生成...")
-    
-    draw_ib_gametypename_dict = {}
-    
-    current_workspace_folder = GlobalConfig.path_workspace_folder()
-    
-    try:
-        all_folders = [f.name for f in os.scandir(current_workspace_folder) if f.is_dir()]
-    except Exception as e:
-        return draw_ib_gametypename_dict
-    
-    for folder_name in all_folders:
-        folder_path = os.path.join(current_workspace_folder, folder_name)
-        
-        has_type_folder = False
-        try:
-            subdirs = os.listdir(folder_path)
-            for subdir in subdirs:
-                if subdir.startswith("TYPE_"):
-                    has_type_folder = True
-                    break
-        except:
-            pass
-        
-        if not has_type_folder:
-            continue
-        
-        if "-" in folder_name:
-            draw_ib_key = folder_name
-        else:
-            draw_ib_key = folder_name
-        
-        dirs = os.listdir(folder_path)
-        gpu_folders = []
-        cpu_folders = []
-        
-        for dirname in dirs:
-            if not dirname.startswith("TYPE_"):
-                continue
-            type_folder_path = os.path.join(folder_path, dirname)
-            if dirname.startswith("TYPE_GPU"):
-                gpu_folders.append(type_folder_path)
-            elif dirname.startswith("TYPE_CPU"):
-                cpu_folders.append(type_folder_path)
-        
-        all_type_folders = gpu_folders + cpu_folders
-        
-        for type_folder_path in all_type_folders:
-            import_json_path = os.path.join(type_folder_path, "import.json")
-            if os.path.exists(import_json_path):
-                try:
-                    import_json = JsonUtils.LoadFromFile(import_json_path)
-                    work_game_type = import_json.get("WorkGameType", "")
-                    if work_game_type:
-                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
-                        break
-                except Exception:
-                    continue
-            
-            tmp_json_path = os.path.join(type_folder_path, "tmp.json")
-            if os.path.exists(tmp_json_path):
-                try:
-                    tmp_json = ConfigUtils.read_tmp_json(type_folder_path)
-                    work_game_type = tmp_json.get("WorkGameType", "")
-                    if work_game_type:
-                        draw_ib_gametypename_dict[draw_ib_key] = work_game_type
-                        break
-                except Exception:
-                    continue
-    
-    if draw_ib_gametypename_dict:
-        JsonUtils.SaveToFile(json_dict=draw_ib_gametypename_dict, filepath=workspace_import_json_path)
-    
-    return draw_ib_gametypename_dict
+from ..helper.ssmt4_utils import SSMT4Utils
 
 
 class GIMITextureMarkName:
@@ -130,42 +45,6 @@ class ModModelGIMI:
         # (3) 这些属性用于ini生成
         self.texture_hash_filter_index_dict = {}
 
-    def _find_ssmt4_unique_str(self, draw_ib: str, draw_ib_gametypename_dict: dict) -> str:
-        '''
-        查找 SSMT4 格式的 unique_str
-        
-        第三代格式（SSMT3）：文件夹结构为 DrawIB/TYPE_xxx/
-        第四代格式（SSMT4）：文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
-        
-        通过检查工作空间中是否存在以 draw_ib 开头的 SSMT4 格式文件夹来判断
-        '''
-        workspace_folder = GlobalConfig.path_workspace_folder()
-        
-        if draw_ib in draw_ib_gametypename_dict:
-            return ""
-        
-        try:
-            all_folders = [f.name for f in os.scandir(workspace_folder) if f.is_dir()]
-            ssmt4_folders = [f for f in all_folders if f.startswith(draw_ib + "-")]
-            
-            if ssmt4_folders:
-                for folder_name in ssmt4_folders:
-                    if folder_name in draw_ib_gametypename_dict:
-                        return folder_name
-                    
-                    folder_path = os.path.join(workspace_folder, folder_name)
-                    try:
-                        subdirs = os.listdir(folder_path)
-                        for subdir in subdirs:
-                            if subdir.startswith("TYPE_"):
-                                return folder_name
-                    except:
-                        continue
-        except Exception as e:
-            print(f"查找 SSMT4 文件夹时出错: {e}")
-        
-        return ""
-
     def parse_draw_ib_draw_ib_model_dict(self):
         '''
         根据obj的命名规则，推导出DrawIB并抽象为DrawIBModel
@@ -174,10 +53,10 @@ class ModModelGIMI:
         第三代格式：物体名称为 DrawIB-Component.Alias，文件夹结构为 DrawIB/TYPE_xxx/
         第四代格式：物体名称为 DrawIB-IndexCount-FirstIndex.Alias，文件夹结构为 DrawIB-IndexCount-FirstIndex/TYPE_xxx/
         '''
-        draw_ib_gametypename_dict = check_and_try_generate_import_json_for_ssmt4()
+        draw_ib_gametypename_dict = SSMT4Utils.check_and_try_generate_import_json()
         
         for draw_ib in self.branch_model.draw_ib__component_count_list__dict.keys():
-            unique_str = self._find_ssmt4_unique_str(draw_ib, draw_ib_gametypename_dict)
+            unique_str = SSMT4Utils.find_ssmt4_unique_str(draw_ib, draw_ib_gametypename_dict)
             
             if unique_str:
                 print(f"检测到 SSMT4 格式: draw_ib={draw_ib}, unique_str={unique_str}")

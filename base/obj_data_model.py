@@ -22,6 +22,7 @@ class ObjDataModel:
     drawindexed_obj:M_DrawIndexed = field(init=False,repr=False,default_factory=M_DrawIndexed)
 
     index_count:int = field(init=False,repr=False,default=0)
+    vertex_count:int = field(init=False,repr=False,default=0)
     first_index:int = field(init=False,repr=False,default=0)
     is_ssmt4:bool = field(init=False,repr=False,default=False)
 
