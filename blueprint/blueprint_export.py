@@ -292,6 +292,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             print(f"Mod导出路径: {mod_export_path}")
             
             start_operation("PostProcessNodes")
+            BlueprintExportHelper.clear_postprocess_caches()
             BlueprintExportHelper.execute_postprocess_nodes(mod_export_path)
             end_operation("PostProcessNodes")
             
