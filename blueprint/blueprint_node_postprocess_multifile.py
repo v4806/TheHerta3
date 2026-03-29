@@ -52,6 +52,14 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
         max=100
     )
 
+    def _hash_to_resource_prefix(self, h):
+        """将哈希值转换为资源名称前缀格式
+        
+        c3806ef1-8322-0 -> c3806ef1_8322_0
+        c3806ef1 -> c3806ef1
+        """
+        return h.replace('-', '_')
+
     def draw_buttons(self, context, layout):
         layout.prop(self, "hash_values")
         layout.prop(self, "animation_swapkey")
@@ -308,19 +316,34 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
                 if not sections:
                     continue
 
+                buffer_folders = []
+                for i in range(1, 100):
+                    buffer_folder = os.path.join(mod_export_path, f"Buffer{i:02d}")
+                    if os.path.exists(buffer_folder):
+                        buffer_folders.append(f"Buffer{i:02d}")
+                    else:
+                        break
+
+                if len(buffer_folders) < 2:
+                    print(f"至少需要 Buffer01 和 Buffer02 两个文件夹才能进行多文件配置")
+                    continue
+
+                for section_name in list(sections.keys()):
+                    if section_name.startswith('[Resource_') and section_name.endswith(']'):
+                        original_lines = sections[section_name].copy()
+                        new_lines = []
+                        for line in original_lines:
+                            modified_line = line
+                            for buf_folder in buffer_folders[1:]:
+                                old_path = f"filename = {buf_folder}/"
+                                if old_path in line:
+                                    modified_line = line.replace(old_path, "filename = Buffer01/")
+                                    break
+                            new_lines.append(modified_line)
+                        resource_name = section_name[1:-1]
+                        sections[section_name] = [f'[{resource_name}_1]'] + new_lines
+
                 for hash_value in hash_values:
-                    buffer_folders = []
-                    for i in range(1, 100):
-                        buffer_folder = os.path.join(mod_export_path, f"Buffer{i:02d}")
-                        if os.path.exists(buffer_folder):
-                            buffer_folders.append(f"Buffer{i:02d}")
-                        else:
-                            break
-
-                    if len(buffer_folders) < 2:
-                        print(f"至少需要 Buffer01 和 Buffer02 两个文件夹才能进行多文件配置")
-                        continue
-
                     base_buffer_path = os.path.join("Buffer01", f"{hash_value}-Position.buf")
                     base_buffer_full_path = os.path.join(mod_export_path, base_buffer_path)
                     if not os.path.exists(base_buffer_full_path):
@@ -331,11 +354,7 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
                     if base_buffer is None:
                         continue
 
-                    resource_section = f'[Resource{hash_value}Position]'
-                    if resource_section in sections:
-                        original_lines = sections[resource_section]
-                        new_section_lines = [f'[Resource{hash_value}Position_1]'] + original_lines
-                        sections[resource_section] = new_section_lines
+                    hash_prefix = self._hash_to_resource_prefix(hash_value)
 
                     processed_frames = []
                     for buffer_folder in buffer_folders[1:]:
@@ -351,23 +370,23 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
                                 base_buffer, target_buffer, True
                             )
 
-                            pos_output_path = os.path.join(mod_export_path, buffer_folder, f"{hash_value}-Position_pos.buf")
+                            pos_output_path = os.path.join(mod_export_path, buffer_folder, f"{hash_value}-Position_packed_pos_delta.buf")
                             self._write_buffer_file(pos_deltas_array, pos_output_path)
 
                             map_output_path = os.path.join(mod_export_path, buffer_folder, f"{hash_value}-Position_map.buf")
                             self._write_buffer_file(map_array, map_output_path)
 
                             folder_num = int(buffer_folder[-2:])
-                            pos_resource_section = f'[Resource{hash_value}Position{folder_num:02d}_pos]'
+                            pos_resource_section = f'[Resource_{hash_prefix}_Position{folder_num:02d}_packed_pos_delta]'
                             stride = 12
 
                             sections[pos_resource_section] = [
                                 'type = Buffer',
                                 f'stride = {stride}',
-                                f'filename = {buffer_folder}/{hash_value}-Position_pos.buf'
+                                f'filename = {buffer_folder}/{hash_value}-Position_packed_pos_delta.buf'
                             ]
 
-                            map_resource_section = f'[Resource{hash_value}Position{folder_num:02d}_Map]'
+                            map_resource_section = f'[Resource_{hash_prefix}_Position{folder_num:02d}_Map]'
                             sections[map_resource_section] = [
                                 'type = Buffer',
                                 'stride = 4',
@@ -389,20 +408,20 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
                     
                     for state_index, (folder_num, buffer_folder) in enumerate(processed_frames):
                         shader_lines.append(f"if {self.animation_swapkey} == {state_index}")
-                        shader_lines.append(f"      cs-t51 = copy Resource{hash_value}Position{folder_num:02d}_pos")
+                        shader_lines.append(f"      cs-t51 = copy Resource_{hash_prefix}_Position{folder_num:02d}_packed_pos_delta")
                         shader_lines.append(f"endif")
 
                     shader_lines.append("")
 
                     for state_index, (folder_num, buffer_folder) in enumerate(processed_frames):
                         shader_lines.append(f"if {self.animation_swapkey} == {state_index}")
-                        shader_lines.append(f"      cs-t75 = copy Resource{hash_value}Position{folder_num:02d}_Map")
+                        shader_lines.append(f"      cs-t75 = copy Resource_{hash_prefix}_Position{folder_num:02d}_Map")
                         shader_lines.append(f"endif")
 
                     shader_lines.append("")
                     shader_lines.append("    cs = ./res/merge_anim_packed_delta.hlsl")
-                    shader_lines.append(f"    cs-u5 = copy Resource{hash_value}Position_1")
-                    shader_lines.append(f"    Resource{hash_value}Position = ref cs-u5")
+                    shader_lines.append(f"    cs-u5 = copy Resource_{hash_prefix}_Position_1")
+                    shader_lines.append(f"    Resource_{hash_prefix}_Position = ref cs-u5")
 
                     shader_source_path = self._get_shader_source_path()
                     if shader_source_path and os.path.exists(shader_source_path):
@@ -443,7 +462,8 @@ class SSMTNode_PostProcess_MultiFile(SSMTNode_PostProcess_Base):
                     constants_lines.append(f"global persist {self.active_swapkey} = 0")
 
                 for hash_value in hash_values:
-                    post_copy_line = f"post Resource{hash_value}Position = copy_desc Resource{hash_value}Position_1"
+                    hash_prefix = self._hash_to_resource_prefix(hash_value)
+                    post_copy_line = f"post Resource_{hash_prefix}_Position = copy_desc Resource_{hash_prefix}_Position_1"
                     post_run_line = f"post run = CustomShader_{hash_value}_1Anim"
 
                     if post_copy_line not in constants_lines:
