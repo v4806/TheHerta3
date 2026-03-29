@@ -44,7 +44,7 @@ Texture1D<float4> IniParams : register(t120);
 // From index 100 onwards
 // --- [PYTHON-MANAGED BLOCK END] ---
 
-[numthreads(16 1, 1)]
+[numthreads(16, 1, 1)]
 void main(uint3 threadID : SV_DispatchThreadID)
 {
     uint i = threadID.x;

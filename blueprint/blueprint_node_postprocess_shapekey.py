@@ -232,11 +232,10 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 if obj_name not in all_objects: all_objects.append(obj_name)
                 obj_hash = self._extract_hash_from_name(obj_name)
                 if obj_hash:
-                    hash_prefix = self._extract_hash_prefix(obj_hash)
-                    if hash_prefix:
-                        if hash_prefix not in hash_to_objects: hash_to_objects[hash_prefix] = []
-                        if obj_name not in hash_to_objects[hash_prefix]: hash_to_objects[hash_prefix].append(obj_name)
-        return slot_to_name_to_objects, list(hash_to_objects.keys()), hash_to_objects, all_objects
+                    if obj_hash not in hash_to_objects: hash_to_objects[obj_hash] = []
+                    if obj_name not in hash_to_objects[obj_hash]: hash_to_objects[obj_hash].append(obj_name)
+        unique_hashes = list(OrderedDict.fromkeys(h for obj in all_objects if (h := self._extract_hash_from_name(obj))))
+        return slot_to_name_to_objects, unique_hashes, hash_to_objects, all_objects
 
     @staticmethod
     def parse_vertex_struct(struct_definition):
@@ -330,28 +329,67 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
 
         if not NUMPY_AVAILABLE:
             print("Numpy库未找到，无法执行缓冲区优化。")
-            return False
+            return False, {}
 
         print(f"开始处理缓冲区 (紧凑:{'是' if use_packed else '否'}, 增量(仅位置):{'是' if use_delta else '否'})...")
 
+        hash_to_actual_file_hash = {}
         buffers_to_process = set()
         for slot, names_data in slot_to_name_to_objects.items():
             for obj in [o for name, objs in names_data.items() for o in objs]:
                 h = self._extract_hash_from_name(obj)
-                h_prefix = self._extract_hash_prefix(h) if h else None
-                if h_prefix: buffers_to_process.add((h_prefix, slot))
+                if h: buffers_to_process.add((h, slot))
 
-        for h_prefix, slot in sorted(list(buffers_to_process)):
-            base_filename = f"{h_prefix}-Position.buf"
+        print(f"  [DEBUG] 需要处理 {len(buffers_to_process)} 个缓冲区组合")
+
+        for h, slot in sorted(list(buffers_to_process)):
+            h_prefix = self._extract_hash_prefix(h)
+            base_filename = f"{h}-Position.buf"
             base_path = os.path.join(mod_export_path, "Buffer0000", base_filename)
+            
+            print(f"  [DEBUG] 尝试查找基础文件: {base_path}")
+            
+            actual_hash = h
+            if not os.path.exists(base_path):
+                pattern = os.path.join(mod_export_path, "Buffer0000", f"{h_prefix}-*-Position.buf")
+                matches = glob.glob(pattern)
+                if matches:
+                    base_path = matches[0]
+                    base_filename = os.path.basename(base_path)
+                    actual_hash = base_filename.replace("-Position.buf", "")
+                    print(f"    通过前缀匹配找到基础文件: {base_filename}")
+                else:
+                    print(f"    [WARNING] 找不到基础文件，pattern: {pattern}")
+            
             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
-            shapekey_path = os.path.join(mod_export_path, folder_name, base_filename)
+            shapekey_filename = f"{actual_hash}-Position.buf"
+            shapekey_path = os.path.join(mod_export_path, folder_name, shapekey_filename)
+            
+            print(f"  [DEBUG] 尝试查找形态键文件: {shapekey_path}")
+            
+            if not os.path.exists(shapekey_path):
+                pattern = os.path.join(mod_export_path, folder_name, f"{h_prefix}-*-Position.buf")
+                matches = glob.glob(pattern)
+                if matches:
+                    shapekey_path = matches[0]
+                    shapekey_filename = os.path.basename(shapekey_path)
+                    actual_hash = shapekey_filename.replace("-Position.buf", "")
+                    print(f"    通过前缀匹配找到形态键文件: {shapekey_filename}")
+                else:
+                    print(f"    [WARNING] 找不到形态键文件，pattern: {pattern}")
+            
             output_dir = os.path.join(mod_export_path, folder_name)
 
-            print(f"  处理槽位 {slot} (哈希前缀: {h_prefix})...")
+            print(f"  处理槽位 {slot} (哈希: {h}, 实际文件哈希: {actual_hash}, 前缀: {h_prefix})...")
             if not all(os.path.exists(p) for p in [base_path, shapekey_path]):
-                print(f"    -> 跳过：找不到基础或形态键文件 for hash {h_prefix}, slot {slot}")
+                print(f"    -> 跳过：找不到基础或形态键文件 for hash {h}, slot {slot}")
+                print(f"       基础路径: {base_path} (存在: {os.path.exists(base_path)})")
+                print(f"       形态键路径: {shapekey_path} (存在: {os.path.exists(shapekey_path)})")
                 continue
+            
+            if h not in hash_to_actual_file_hash:
+                hash_to_actual_file_hash[h] = actual_hash
+            
             os.makedirs(output_dir, exist_ok=True)
 
             try:
@@ -371,7 +409,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 base_data = np.frombuffer(base_bytes, dtype='f').reshape((num_vertices, NUM_FLOATS_PER_VERTEX))
                 shapekey_data = np.frombuffer(shapekey_bytes, dtype='f').reshape((num_vertices, NUM_FLOATS_PER_VERTEX))
 
-                output_prefix = os.path.join(output_dir, f"{h_prefix}-Position")
+                output_prefix = os.path.join(output_dir, f"{actual_hash}-Position")
 
                 if use_delta:
                     data_to_write = shapekey_data[:, :3] - base_data[:, :3]
@@ -430,10 +468,10 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     pass
             except Exception as e:
                 print(f"    -> 处理时出错: {e}")
-                return False
+                return False, {}
 
         print("缓冲区处理完成。")
-        return True
+        return True, hash_to_actual_file_hash
 
     def _read_ini_to_ordered_dict(self, ini_file_path):
         """读取INI文件到有序字典"""
@@ -676,13 +714,22 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             for name, objects in names_data.items():
                 for obj_name in objects:
                     obj_hash = self._extract_hash_from_name(obj_name)
-                    obj_prefix = self._extract_hash_prefix(obj_hash) if obj_hash else None
-                    if obj_prefix:
-                        map_path = os.path.join(mod_export_path, f"Buffer100{slot_num}" if slot_num < 10 else f"Buffer10{slot_num}", f"{obj_prefix}-Position_map.buf")
-                        if os.path.exists(map_path) and obj_prefix not in slot_map_files:
+                    if obj_hash:
+                        obj_prefix = self._extract_hash_prefix(obj_hash)
+                        folder_name = f"Buffer100{slot_num}" if slot_num < 10 else f"Buffer10{slot_num}"
+                        map_path = os.path.join(mod_export_path, folder_name, f"{obj_hash}-Position_map.buf")
+                        
+                        if not os.path.exists(map_path):
+                            pattern = os.path.join(mod_export_path, folder_name, f"{obj_prefix}-*-Position_map.buf")
+                            matches = glob.glob(pattern)
+                            if matches:
+                                map_path = matches[0]
+                        
+                        if os.path.exists(map_path) and obj_hash not in slot_map_files:
                             try:
                                 with open(map_path, 'rb') as f:
-                                    slot_map_files[obj_prefix] = np.frombuffer(f.read(), dtype=np.int32)
+                                    slot_map_files[obj_hash] = np.frombuffer(f.read(), dtype=np.int32)
+                                    print(f"    [DEBUG] 加载映射文件: {os.path.basename(map_path)}")
                             except Exception as e:
                                 print(f"    读取映射文件失败: {e}")
             
@@ -696,8 +743,9 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 for obj_name in objects:
                     obj_hash = self._extract_hash_from_name(obj_name)
                     obj_prefix = self._extract_hash_prefix(obj_hash) if obj_hash else None
-                    if obj_prefix != hash_val:
-                        print(f"        [DEBUG] 跳过物体 '{obj_name}' (前缀不匹配: {obj_prefix} != {hash_val})")
+                    hash_prefix = self._extract_hash_prefix(hash_val)
+                    if obj_prefix != hash_prefix:
+                        print(f"        [DEBUG] 跳过物体 '{obj_name}' (前缀不匹配: {obj_prefix} != {hash_prefix})")
                         continue
                     
                     if obj_name not in calculated_ranges:
@@ -713,7 +761,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     end_v = max(0, min(end_v, vertex_count - 1))
                     print(f"        [DEBUG] 物体 '{obj_name}' 设置顶点 {start_v}-{end_v} 为 FREQ索引 {freq_idx}")
                     
-                    index_map = slot_map_files.get(obj_prefix)
+                    index_map = slot_map_files.get(obj_hash)
                     if index_map is not None:
                         for v in range(start_v, end_v + 1):
                             if v < len(index_map) and index_map[v] >= 0:
@@ -778,9 +826,12 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                 return
 
             hash_to_stride = {}
-            if not self._process_shapekey_buffers(mod_export_path, slot_to_name_to_objects, hash_to_stride):
+            success, hash_to_actual_file_hash = self._process_shapekey_buffers(mod_export_path, slot_to_name_to_objects, hash_to_stride)
+            if not success:
                 print("缓冲区处理失败")
                 return
+            
+            print(f"  [DEBUG] 哈希映射表: {hash_to_actual_file_hash}")
 
             all_unique_names = list(OrderedDict.fromkeys(name for slot_data in slot_to_name_to_objects.values() for name in slot_data.keys()))
             all_unique_objects = list(OrderedDict.fromkeys(obj for slot_data in slot_to_name_to_objects.values() for name_data in slot_data.values() for obj in name_data))
@@ -857,8 +908,10 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     hash_unique_objects = list(OrderedDict.fromkeys(obj for slot_data in hash_slot_data.values() for name_data in slot_data.values() for obj in name_data))
                     
                     if use_optimized:
-                        vertex_count = vertex_counts.get(hash_val, 10000)
-                        self._generate_vertex_freq_index_buffers(mod_export_path, hash_val, hash_slot_data, hash_unique_names, vertex_count, calculated_ranges)
+                        hash_prefix = self._extract_hash_prefix(hash_val)
+                        vertex_count = vertex_counts.get(hash_prefix, 10000)
+                        actual_file_hash = hash_to_actual_file_hash.get(hash_val, hash_val)
+                        self._generate_vertex_freq_index_buffers(mod_export_path, actual_file_hash, hash_slot_data, hash_unique_names, vertex_count, calculated_ranges)
                     
                     if not self._update_shader_file(hash_to_shader_paths[hash_val], hash_slot_data, use_packed, use_delta, hash_unique_names, hash_unique_objects, use_optimized):
                         print(f"更新哈希 {hash_val} 的着色器文件失败")
@@ -895,7 +948,8 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     constants_lines.append(f"global {end_var} = {end_v}")
 
             for h in unique_hashes:
-                base_resources = hash_to_base_resources.get(h, [])
+                h_prefix = self._extract_hash_prefix(h)
+                base_resources = hash_to_base_resources.get(h_prefix, [])
                 res_to_post = base_resources if base_resources else [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]
                 for res_name in res_to_post:
                     if f"post {res_name} = copy_desc" not in constants_content:
@@ -986,7 +1040,8 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
 
                     block_lines.append(f"    cs = ./res/shapekey_anim_{h}.hlsl")
 
-                    base_resources = hash_to_base_resources.get(h, [])
+                    h_prefix = self._extract_hash_prefix(h)
+                    base_resources = hash_to_base_resources.get(h_prefix, [])
                     res_to_bind = base_resources if base_resources else [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]
                     if len(res_to_bind) > 1:
                         block_lines.append(f"\n    ; --- Base Mesh Switching ---")
@@ -996,7 +1051,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                         res_name = res_to_bind[0]
                         block_lines.extend([f"    cs-u5 = copy {res_name}_0", f"    {res_name} = ref cs-u5"])
 
-                    dispatch_count = vertex_counts.get(h, 10000)
+                    dispatch_count = vertex_counts.get(h_prefix, 10000)
                     if dispatch_count == 0:
                         dispatch_count = 10000
                     block_lines.extend([f"    Dispatch = {dispatch_count}, 1, 1", "    cs-u5 = null", *[f"    {reg} = null" for reg in sorted(list(set(t_registers_to_null)))]])
@@ -1006,10 +1061,12 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
             generated_section_names = set()
 
             for h in unique_hashes:
+                h_prefix = self._extract_hash_prefix(h)
+                actual_file_hash = hash_to_actual_file_hash.get(h, h)
                 section_name = f"[Resource_{self._hash_to_resource_prefix(h)}_Position0000]"
                 if section_name not in sections and section_name not in generated_section_names:
-                    stride = hash_to_stride.get(h, 40)
-                    new_resource_lines.extend([section_name, "type = Buffer", f"stride = {stride}", f"filename = Buffer0000/{h}-Position.buf", ""])
+                    stride = hash_to_stride.get(h_prefix, 40)
+                    new_resource_lines.extend([section_name, "type = Buffer", f"stride = {stride}", f"filename = Buffer0000/{actual_file_hash}-Position.buf", ""])
                     generated_section_names.add(section_name)
 
             for slot, names_data in slot_to_name_to_objects.items():
@@ -1017,6 +1074,7 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     h = self._extract_hash_from_name(obj)
                     h_prefix = self._extract_hash_prefix(h) if h else None
                     if h_prefix:
+                        actual_file_hash = hash_to_actual_file_hash.get(h, h)
                         base_stride = hash_to_stride.get(h_prefix, 40)
                         stride, filename, section_name = 0, "", ""
                         if use_delta:
@@ -1030,32 +1088,34 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                             stride = base_stride
 
                         if use_delta or use_packed:
-                            section_name = f"[Resource_{self._hash_to_resource_prefix(h_prefix)}_Position100{slot}{res_suffix}]"
+                            section_name = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}{res_suffix}]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
-                            filename = f"{folder_name}/{h_prefix}-Position{res_suffix}.buf"
+                            filename = f"{folder_name}/{actual_file_hash}-Position{res_suffix}.buf"
                             if section_name not in sections and section_name not in generated_section_names:
                                 new_resource_lines.extend([section_name, "type = Buffer", f"stride = {stride}", f"filename = {filename}", ""])
                                 generated_section_names.add(section_name)
 
                         if use_packed:
-                            map_section = f"[Resource_{self._hash_to_resource_prefix(h_prefix)}_Position100{slot}_Map]"
+                            map_section = f"[Resource_{self._hash_to_resource_prefix(h)}_Position100{slot}_Map]"
                             folder_name = f"Buffer100{slot}" if slot < 10 else f"Buffer10{slot}"
                             if map_section not in sections and map_section not in generated_section_names:
-                                new_resource_lines.extend([map_section, "type = Buffer", "stride = 4", f"filename = {folder_name}/{h_prefix}-Position_map.buf", ""])
+                                new_resource_lines.extend([map_section, "type = Buffer", "stride = 4", f"filename = {folder_name}/{actual_file_hash}-Position_map.buf", ""])
                                 generated_section_names.add(map_section)
             
             if use_optimized:
                 for h in unique_hashes:
+                    actual_file_hash = hash_to_actual_file_hash.get(h, h)
                     freq_idx_section = f"[Resource_{self._hash_to_resource_prefix(h)}_Position_FreqIndices]"
                     if freq_idx_section not in sections and freq_idx_section not in generated_section_names:
-                        new_resource_lines.extend([freq_idx_section, "type = Buffer", "stride = 4", f"filename = Buffer0000/{h}-Position_freq_indices.buf", ""])
+                        new_resource_lines.extend([freq_idx_section, "type = Buffer", "stride = 4", f"filename = Buffer0000/{actual_file_hash}-Position_freq_indices.buf", ""])
                         generated_section_names.add(freq_idx_section)
 
             if new_resource_lines:
                 sections[";; --- Generated Shape Key Buffers ---"] = new_resource_lines
 
             for h in unique_hashes:
-                for res_name in hash_to_base_resources.get(h, [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]):
+                h_prefix = self._extract_hash_prefix(h)
+                for res_name in hash_to_base_resources.get(h_prefix, [f"Resource_{self._hash_to_resource_prefix(h)}_Position"]):
                     if f"[{res_name}]" in sections and not any(f"[{res_name}_0]" in line for line in sections[f"[{res_name}]"]):
                         sections[f"[{res_name}]"].insert(0, f"[{res_name}_0]")
 
