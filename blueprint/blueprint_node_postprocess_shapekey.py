@@ -865,7 +865,9 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                     if start_v is not None and end_v is not None:
                         all_ranges.append((start_v, end_v))
                 if all_ranges:
-                    calculated_ranges[obj_name] = all_ranges
+                    min_start = min(r[0] for r in all_ranges)
+                    max_end = max(r[1] for r in all_ranges)
+                    calculated_ranges[obj_name] = (min_start, max_end)
 
             vertex_counts = {}
             for s, ls in sections.items():
@@ -878,8 +880,26 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
                                 hash_prefix = self._extract_hash_prefix(hash_val)
                                 if hash_prefix:
                                     vertex_counts[hash_prefix] = int(l.split('=')[1].strip())
+                                    print(f"  [DEBUG] 从INI读取顶点数: section={s}, hash_prefix={hash_prefix}, count={vertex_counts[hash_prefix]}")
                             except (ValueError, IndexError):
                                 pass
+            
+            print(f"  [DEBUG] vertex_counts 字典: {vertex_counts}")
+            
+            for h in unique_hashes:
+                h_prefix = self._extract_hash_prefix(h)
+                if h_prefix not in vertex_counts:
+                    pattern = os.path.join(mod_export_path, "Buffer0000", f"{h_prefix}-*-Position.buf")
+                    matches = glob.glob(pattern)
+                    if matches:
+                        try:
+                            file_size = os.path.getsize(matches[0])
+                            stride = hash_to_stride.get(h_prefix, 40)
+                            inferred_count = file_size // stride
+                            vertex_counts[h_prefix] = inferred_count
+                            print(f"  [DEBUG] 从文件大小推断顶点数: hash_prefix={h_prefix}, file={os.path.basename(matches[0])}, size={file_size}, stride={stride}, count={inferred_count}")
+                        except Exception as e:
+                            print(f"  [WARNING] 无法推断顶点数: {e}")
 
             dest_res_dir = os.path.join(mod_export_path, "res")
             os.makedirs(dest_res_dir, exist_ok=True)
