@@ -29,6 +29,7 @@ from .blueprint import blueprint_node_vertex_group_mapping_input
 from .blueprint import blueprint_node_object_name_modify
 from .blueprint import blueprint_nest_navigate
 from .blueprint import blueprint_node_cross_ib
+from .blueprint import blueprint_shader_quick_connect
 
 # 第四代导出模块
 try:
@@ -185,11 +186,13 @@ def register():
     blueprint_node_object_name_modify.register()
     blueprint_nest_navigate.register()
     blueprint_node_cross_ib.register()
+    blueprint_shader_quick_connect.register()
 
 
 
 def unregister():
     # 蓝图系统
+    blueprint_shader_quick_connect.unregister()
     blueprint_node_cross_ib.unregister()
     blueprint_nest_navigate.unregister()
     blueprint_node_object_name_modify.unregister()

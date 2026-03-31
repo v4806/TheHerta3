@@ -92,13 +92,40 @@ class SSMTNode_DataType(SSMTNodeBase):
             return False
 
     def is_draw_ib_matched(self, draw_ib: str) -> bool:
-        """检查给定的 DrawIB 是否匹配"""
+        """检查给定的 DrawIB 是否匹配
+        
+        支持以下匹配方式：
+        1. 完全匹配：用户输入 "DrawIB_12345"，传入 "DrawIB_12345"
+        2. 第四代格式匹配：用户输入 "DrawIB_12345-IndexCount-FirstIndex"，传入 "DrawIB_12345"
+        3. 前缀匹配：用户输入 "DrawIB_12345"，传入 "DrawIB_12345-IndexCount-FirstIndex"
+        """
         if not self.draw_ib_match:
             return False
         
-        # 支持多个 DrawIB，用逗号分隔
         matched_draw_ib_list = [ib.strip() for ib in self.draw_ib_match.split(',')]
-        return draw_ib in matched_draw_ib_list
+        
+        for matched_ib in matched_draw_ib_list:
+            if draw_ib == matched_ib:
+                return True
+            
+            if draw_ib.startswith(matched_ib + "-"):
+                return True
+            
+            if matched_ib.startswith(draw_ib + "-"):
+                return True
+            
+            from ..helper.ssmt4_utils import SSMT4Utils
+            if SSMT4Utils.is_ssmt4_format(matched_ib):
+                parsed = SSMT4Utils.parse_ssmt4_folder_name(matched_ib)
+                if parsed and parsed.get("draw_ib") == draw_ib:
+                    return True
+            
+            if SSMT4Utils.is_ssmt4_format(draw_ib):
+                parsed = SSMT4Utils.parse_ssmt4_folder_name(draw_ib)
+                if parsed and parsed.get("draw_ib") == matched_ib:
+                    return True
+        
+        return False
 
     def get_d3d11_element_list(self):
         """获取 D3D11ElementList"""
