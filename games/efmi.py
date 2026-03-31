@@ -714,7 +714,8 @@ class ModModelEFMI:
                             continue
                         
                         texture_override_ib_section.append(self.vlr_filter_index_indent + f";跨 IB 身份块,绘制 {source_identifier} 需要跨 Ib 的物体引用")
-                        texture_override_ib_section.append(self.vlr_filter_index_indent + vb_condition_target)
+                        if vb_condition_target:
+                            texture_override_ib_section.append(self.vlr_filter_index_indent + vb_condition_target)
                         texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{source_identifier}")
                         texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
                         texture_override_ib_section.append(self.vlr_filter_index_indent + "    ;跨 IB 块数据区域")
@@ -807,7 +808,8 @@ class ModModelEFMI:
                         continue
                     
                     texture_override_ib_section.append(self.vlr_filter_index_indent + f";跨 IB 身份块,绘制 {source_identifier} 需要跨 Ib 的物体引用")
-                    texture_override_ib_section.append(self.vlr_filter_index_indent + vb_condition_target)
+                    if vb_condition_target:
+                        texture_override_ib_section.append(self.vlr_filter_index_indent + vb_condition_target)
                     texture_override_ib_section.append(self.vlr_filter_index_indent + f"    cs-t2 = ResourceID_{source_identifier}")
                     texture_override_ib_section.append(self.vlr_filter_index_indent + "    run = CustomShader_RedirectCB1")
                     texture_override_ib_section.append(self.vlr_filter_index_indent + "    ;跨 IB 块数据区域")

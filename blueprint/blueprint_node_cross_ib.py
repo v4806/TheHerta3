@@ -321,7 +321,7 @@ class SSMTNode_CrossIB(SSMTNodeBase):
             vb_slots.append("201")
         
         if not vb_slots:
-            return "if vs == 200 || vs == 201"
+            return ""
         
         if len(vb_slots) == 1:
             return f"if vs == {vb_slots[0]}"
@@ -337,7 +337,7 @@ class SSMTNode_CrossIB(SSMTNodeBase):
             vb_slots.append("203")
         
         if not vb_slots:
-            return "if vs == 202 || vs == 203"
+            return ""
         
         if len(vb_slots) == 1:
             return f"if vs == {vb_slots[0]}"
