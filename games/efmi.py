@@ -186,7 +186,8 @@ class ModModelEFMI:
             draw_call_model_dict[unique_str] = draw_call_model_list
 
         for unique_str, draw_call_model_list in draw_call_model_dict.items():
-            submesh_model = SubMeshModel(drawcall_model_list=draw_call_model_list)
+            has_multifile = len(self.branch_model.multifile_export_nodes) > 0
+            submesh_model = SubMeshModel(drawcall_model_list=draw_call_model_list, use_temp_copy_for_merge=has_multifile)
             self._submesh_model_list.append(submesh_model)
             
             adapter = DrawIBModelAdapter(submesh_model, self.branch_model)
