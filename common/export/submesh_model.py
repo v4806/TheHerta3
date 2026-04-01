@@ -107,7 +107,7 @@ class SubMeshModel:
         
         if len(mesh_objects) == 1:
             submesh_merged_obj = mesh_objects[0]
-        else:
+        elif self.use_temp_copy_for_merge:
             for obj in mesh_objects:
                 temp_copy = obj.copy()
                 temp_copy.data = obj.data.copy()
@@ -137,6 +137,20 @@ class SubMeshModel:
                 return
             
             should_delete_merged = True
+        else:
+            first_obj_name = mesh_objects[0].name
+            
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in mesh_objects:
+                obj.select_set(True)
+            bpy.context.view_layer.objects.active = mesh_objects[0]
+
+            ObjUtils.join_objects(bpy.context, mesh_objects)
+
+            submesh_merged_obj = bpy.data.objects.get(first_obj_name)
+            if submesh_merged_obj is None:
+                print(f"SubMeshModel 错误: 合并后找不到对象 {first_obj_name}")
+                return
 
         if self.d3d11_game_type:
             obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11_game_type, obj_name=submesh_merged_obj.name)

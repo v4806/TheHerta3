@@ -24,7 +24,6 @@ class PreprocessTask:
     object_names: List[str]
     output_blend: str
     mirror_workflow: bool
-    vg_mapping_texts: Dict[str, str]
 
 
 @dataclass
@@ -53,7 +52,6 @@ class ParallelPreprocessManager:
         blend_file: str,
         object_names: List[str],
         mirror_workflow: bool = False,
-        vg_mapping_texts: Dict[str, str] = None,
         progress_callback=None
     ) -> Dict[str, str]:
         """
@@ -63,7 +61,6 @@ class ParallelPreprocessManager:
             blend_file: 原始 .blend 文件路径
             object_names: 物体名称列表
             mirror_workflow: 是否启用非镜像工作流
-            vg_mapping_texts: 顶点组映射表数据 {文本名称: 文本内容}
             progress_callback: 进度回调函数
         
         Returns:
@@ -79,7 +76,7 @@ class ParallelPreprocessManager:
             
             subsets = self._split_objects(object_names)
             
-            self._create_tasks(blend_file, subsets, mirror_workflow, vg_mapping_texts or {})
+            self._create_tasks(blend_file, subsets, mirror_workflow)
             
             self._run_workers(progress_callback)
             
@@ -136,8 +133,7 @@ class ParallelPreprocessManager:
         self,
         blend_file: str,
         subsets: List[List[str]],
-        mirror_workflow: bool,
-        vg_mapping_texts: Dict[str, str]
+        mirror_workflow: bool
     ) -> None:
         """创建预处理任务"""
         for i, subset in enumerate(subsets):
@@ -148,8 +144,7 @@ class ParallelPreprocessManager:
                 blend_file=blend_file,
                 object_names=subset,
                 output_blend=output_blend,
-                mirror_workflow=mirror_workflow,
-                vg_mapping_texts=vg_mapping_texts
+                mirror_workflow=mirror_workflow
             )
             self.tasks.append(task)
             
@@ -261,13 +256,11 @@ task_id = {task.task_id}
 object_names = {json.dumps(task.object_names)}
 mirror_workflow = {str(task.mirror_workflow)}
 output_blend = r"{task.output_blend}"
-vg_mapping_texts = {json.dumps(task.vg_mapping_texts or {})}
 
 if VERBOSE:
     print(f"[Worker {{task_id}}] 物体数量: {{len(object_names)}}")
     print(f"[Worker {{task_id}}] 非镜像工作流: {{mirror_workflow}}")
     print(f"[Worker {{task_id}}] 输出文件: {{output_blend}}")
-    print(f"[Worker {{task_id}}] 映射表数量: {{len(vg_mapping_texts)}}")
 
 # 检查物体是否存在
 if VERBOSE:
@@ -752,103 +745,6 @@ def apply_all_transforms(obj):
     print(f"应用全部变换: {obj.name}")
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     print(f"变换已应用，原点已回到世界中心: {obj.name}")
-
-
-def process_vertex_groups(obj, vg_mapping_texts):
-    """处理顶点组：重命名、合并、清理、填充、排序（优化版）"""
-    if obj.type != 'MESH':
-        return {{"renamed": 0, "merged": 0, "cleaned": 0, "filled": 0}}
-    
-    stats = {{"renamed": 0, "merged": 0, "cleaned": 0, "filled": 0}}
-    
-    # 1. 重命名顶点组
-    if vg_mapping_texts:
-        mapping = {{}}
-        for text_name, text_content in vg_mapping_texts.items():
-            for line in text_content.split('\\n'):
-                line = line.strip()
-                if not line or '=' not in line:
-                    continue
-                parts = line.split('=', 1)
-                if len(parts) == 2:
-                    left = parts[0].strip()
-                    right = parts[1].strip()
-                    if left and right:
-                        mapping[left] = right
-        
-        if mapping:
-            for vg in obj.vertex_groups:
-                if vg.name in mapping:
-                    new_name = mapping[vg.name]
-                    if vg.name != new_name:
-                        if new_name in obj.vertex_groups:
-                            existing_vg = obj.vertex_groups[new_name]
-                            existing_vg.name = new_name + ".001"
-                        vg.name = new_name
-                        stats["renamed"] += 1
-    
-    # 2. 合并顶点组（按数字前缀）- 优化版
-    from collections import defaultdict
-    import re
-    prefix_map = defaultdict(list)
-    for vg in obj.vertex_groups:
-        match = re.match(r'^(\d+)', vg.name)
-        if match:
-            prefix_map[match.group(1)].append(vg)
-    
-    for prefix, source_groups in prefix_map.items():
-        if len(source_groups) > 1 or (len(source_groups) == 1 and source_groups[0].name != prefix):
-            target_vg = obj.vertex_groups.get(prefix) or obj.vertex_groups.new(name=prefix)
-            
-            # 优化：批量收集顶点权重，减少API调用
-            vertex_weights = []
-            for vert in obj.data.vertices:
-                total_weight = 0.0
-                for source_vg in source_groups:
-                    try:
-                        total_weight += source_vg.weight(vert.index)
-                    except RuntimeError:
-                        continue
-                
-                if total_weight > 0:
-                    vertex_weights.append((vert.index, min(1.0, total_weight)))
-            
-            # 批量添加权重
-            if vertex_weights:
-                for vert_idx, weight in vertex_weights:
-                    target_vg.add([vert_idx], weight, 'REPLACE')
-            
-            for vg in source_groups:
-                if vg.name in obj.vertex_groups and vg.name != prefix:
-                    obj.vertex_groups.remove(vg)
-            stats["merged"] += 1
-    
-    # 3. 清理非数字顶点组 - 优化版：使用集合操作
-    groups_to_remove = [vg for vg in obj.vertex_groups if not vg.name.isdigit()]
-    for vg in reversed(groups_to_remove):
-        obj.vertex_groups.remove(vg)
-    stats["cleaned"] = len(groups_to_remove)
-    
-    # 4. 填充顶点组间隙 - 优化版：使用集合差集
-    numeric_names = set(vg.name for vg in obj.vertex_groups if vg.name.isdigit())
-    if numeric_names:
-        max_num = max(int(name) for name in numeric_names)
-        # 使用集合差集快速找出缺失的数字
-        existing_nums = set(int(name) for name in numeric_names)
-        missing_nums = set(range(max_num + 1)) - existing_nums
-        
-        for num in sorted(missing_nums):
-            obj.vertex_groups.new(name=str(num))
-            stats["filled"] += 1
-    
-    # 5. 排序顶点组
-    try:
-        bpy.context.view_layer.objects.active = obj
-        bpy.ops.object.vertex_group_sort(sort_type='NAME')
-    except Exception:
-        pass
-    
-    return stats
 
 
 processed_objects = []

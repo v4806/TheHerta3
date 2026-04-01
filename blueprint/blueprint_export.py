@@ -721,16 +721,10 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             print(f"[ParallelPreprocess] 开始并行预处理 {len(objects_to_process)} 个物体...")
             print(f"[ParallelPreprocess] 工作进程数: {num_workers}")
             
-            start_operation("CollectVGMapping")
-            vg_mapping_texts = self._collect_vg_mapping_texts()
-            print(f"[ParallelPreprocess] 收集到 {len(vg_mapping_texts)} 个映射表")
-            end_operation("CollectVGMapping")
-            
             object_blend_map = manager.preprocess_parallel(
                 blend_file=blend_file,
                 object_names=objects_to_process,
                 mirror_workflow=mirror_workflow_enabled,
-                vg_mapping_texts=vg_mapping_texts,
                 progress_callback=progress_callback
             )
             
@@ -899,17 +893,6 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         
         print(f"[VGProcess] 收集到 {len(nodes)} 个顶点组处理节点，顺序: {[n.name for n in nodes]}")
         return nodes
-    
-    def _collect_vg_mapping_texts(self):
-        """收集所有顶点组映射表文本内容"""
-        mapping_texts = {}
-        
-        for text in bpy.data.texts:
-            if text.name.startswith('VG_Match_'):
-                content = '\n'.join(line.body for line in text.lines)
-                mapping_texts[text.name] = content
-        
-        return mapping_texts
     
     def _get_name_modify_nodes(self):
         """获取所有名称修改节点（按照连接顺序）"""
