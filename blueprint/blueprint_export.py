@@ -4,7 +4,7 @@ from ..utils.timer_utils import TimerUtils
 from ..utils.translate_utils import TR
 from ..utils.command_utils import CommandUtils
 from ..utils.collection_utils import CollectionUtils
-from ..utils.obj_utils import ObjUtils
+from ..utils.obj_utils import ObjUtils, get_user_context, set_user_context
 from ..utils.performance_stats import start_operation, end_operation, print_performance_report, save_performance_report_to_editor, reset_performance_stats, set_performance_stats_enabled, is_performance_stats_enabled
 from ..utils.preprocess_cache import get_cache_manager, FingerprintCalculator, reset_cache_manager
 
@@ -93,6 +93,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         reset_performance_stats()
         start_operation("GenerateMod_Total")
         
+        # 记录原始上下文状态
+        original_user_context = get_user_context(context)
+        
         wm = context.window_manager
 
         target_tree_name = self.node_tree_name
@@ -127,6 +130,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         if total_objects == 0:
             self.report({'WARNING'}, "没有找到要导出的物体")
             end_operation("GenerateMod_Total")
+            set_user_context(context, original_user_context)
             return {'CANCELLED'}
         
         use_parallel = Properties_ImportModel.use_parallel_export()
@@ -155,6 +159,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                     except Exception as e:
                         self.report({'ERROR'}, f"自动保存工程失败: {e}")
                         end_operation("GenerateMod_Total")
+                        set_user_context(context, original_user_context)
                         return {'CANCELLED'}
                 elif blend_file_dirty:
                     print("[ParallelPreprocess] 工程有未保存的修改，自动保存工程...")
@@ -165,6 +170,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                     except Exception as e:
                         self.report({'ERROR'}, f"自动保存工程失败: {e}")
                         end_operation("GenerateMod_Total")
+                        set_user_context(context, original_user_context)
                         return {'CANCELLED'}
             
             wm.progress_begin(0, 100)
@@ -291,6 +297,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                     migoto_mod_model.generate_ini()
                 else:
                     self.report({'ERROR'},"当前逻辑暂不支持生成Mod")
+                    set_user_context(context, original_user_context)
                     return {'FINISHED'}
                 end_operation(f"GenerateMod_Export_{export_index}")
 
@@ -350,6 +357,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             end_operation("GenerateMod_Total")
             print_performance_report()
             save_performance_report_to_editor("性能统计报告")
+            
+            # 恢复用户原本的上下文状态（例如权重模式及选中的物体）
+            set_user_context(context, original_user_context)
         
         return {'FINISHED'}
     
