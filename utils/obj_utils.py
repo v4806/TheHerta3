@@ -936,7 +936,7 @@ class ObjUtils:
             if original_mode == 'EDIT':
                 bpy.ops.object.mode_set(mode='OBJECT')
             
-            bpy.ops.object.select_all(action='DESELECT')
+            deselect_all_objects()
             obj.select_set(True)
             bpy.context.view_layer.objects.active = obj
             
@@ -947,14 +947,14 @@ class ObjUtils:
         finally:
             if original_mode == 'EDIT':
                 try:
-                    bpy.ops.object.select_all(action='DESELECT')
+                    deselect_all_objects()
                     obj.select_set(True)
                     bpy.context.view_layer.objects.active = obj
                     bpy.ops.object.mode_set(mode='EDIT')
                 except:
                     pass
             
-            bpy.ops.object.select_all(action='DESELECT')
+            deselect_all_objects()
             for sel_obj in original_selected:
                 if sel_obj:
                     try:

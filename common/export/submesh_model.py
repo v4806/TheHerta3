@@ -118,7 +118,9 @@ class SubMeshModel:
             
             first_temp = temp_obj_copies[0]
             
-            bpy.ops.object.select_all(action='DESELECT')
+            for obj in bpy.context.selected_objects:
+                obj.select_set(False)
+            
             for temp_obj in temp_obj_copies:
                 temp_obj.select_set(True)
             bpy.context.view_layer.objects.active = first_temp
@@ -153,7 +155,8 @@ class SubMeshModel:
                 return
 
         if self.d3d11_game_type:
-            obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11_game_type, obj_name=submesh_merged_obj.name)
+            original_obj_name = mesh_objects[0].name
+            obj_element_model = ObjElementModel(d3d11_game_type=self.d3d11_game_type, obj_name=original_obj_name)
 
             obj_element_model.element_vertex_ndarray = ObjBufferHelper.convert_to_element_vertex_ndarray(
                 original_elementname_data_dict=obj_element_model.original_elementname_data_dict,
