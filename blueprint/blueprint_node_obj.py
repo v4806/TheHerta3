@@ -216,6 +216,7 @@ class SSMTNode_Object_Info(SSMTNodeBase):
                     self.index_count = obj_name_split[1]
                     self.first_index = obj_name_split[2]
                     self.component = obj_name_split[1]
+                    self.prefix = obj_name_total_split[0]
                 
                 if len(obj_name_total_split) >= 2:
                     self.alias_name = ".".join(obj_name_total_split[1:])
@@ -224,6 +225,7 @@ class SSMTNode_Object_Info(SSMTNodeBase):
                 self.draw_ib = obj_name_split[0]
                 if len(obj_name_split) >= 2:
                     self.component = obj_name_split[1]
+                    self.prefix = f"{obj_name_split[0]}-{obj_name_split[1]}"
                 if len(obj_name_split) >= 3:
                     self.alias_name = obj_name_split[2]
             
@@ -244,6 +246,7 @@ class SSMTNode_Object_Info(SSMTNodeBase):
     index_count: bpy.props.StringProperty(name="IndexCount", default="")
     first_index: bpy.props.StringProperty(name="FirstIndex", default="")
     alias_name: bpy.props.StringProperty(name="Alias Name", default="")
+    prefix: bpy.props.StringProperty(name="Prefix", default="")
 
     def init(self, context):
         self.outputs.new('SSMTSocketObject', "Object")
@@ -260,18 +263,8 @@ class SSMTNode_Object_Info(SSMTNodeBase):
             op = row.operator("ssmt.select_node_object", text="", icon='RESTRICT_SELECT_OFF')
             op.object_name = self.object_name
 
-        from ..config.main_config import GlobalConfig, LogicName
-        from ..config.properties_import_model import Properties_ImportModel
-        
-        if GlobalConfig.logic_name == LogicName.EFMI or Properties_ImportModel.use_ssmt4():
-            layout.label(text=f"DrawIB: {self.draw_ib}")
-            layout.label(text=f"IndexCount: {self.index_count}")
-            layout.label(text=f"FirstIndex: {self.first_index}")
-            layout.prop(self, "alias_name", text="Alias Name")
-        else:
-            layout.prop(self, "draw_ib", text="DrawIB")
-            layout.prop(self, "component", text="Component")
-            layout.prop(self, "alias_name", text="Alias Name")
+        if self.prefix:
+            layout.label(text=f"前缀: {self.prefix}")
 
 
 class SSMTNode_Object_Group(SSMTNodeBase):
@@ -541,6 +534,9 @@ class SSMT_OT_View_Group_Objects(bpy.types.Operator):
             if current_node in checked_nodes: 
                 return
             checked_nodes.add(current_node)
+
+            if current_node.mute:
+                return
 
             if getattr(current_node, "bl_idname", "") == 'SSMTNode_Object_Info':
                 obj_name = getattr(current_node, "object_name", "")

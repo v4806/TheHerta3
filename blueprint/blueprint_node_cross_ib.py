@@ -171,6 +171,13 @@ class SSMTNode_CrossIB(SSMTNodeBase):
 
     cross_ib_list: CollectionProperty(type=CrossIBItem)
     
+    original_cross_ib_data: bpy.props.StringProperty(
+        name="原始跨IB数据",
+        description="保存原始的跨IB参数（JSON格式）",
+        default="",
+        options={'HIDDEN'}
+    )
+    
     cross_ib_method: EnumProperty(
         name="跨 IB 方式",
         description="选择跨 IB 的实现方式",
@@ -374,6 +381,77 @@ class SSMTNode_CrossIB(SSMTNodeBase):
 
     def get_match_mode(self):
         return self.match_mode
+    
+    def save_original_params(self):
+        """保存原始参数到字符串属性"""
+        import json
+        
+        original_data = []
+        for item in self.cross_ib_list:
+            original_data.append({
+                'source_index_count': item.source_index_count,
+                'target_index_count': item.target_index_count,
+            })
+        
+        self.original_cross_ib_data = json.dumps(original_data)
+        print(f"[CrossIB] 已保存节点 {self.name} 的原始参数，共 {len(original_data)} 条")
+    
+    def restore_original_params(self):
+        """从字符串属性恢复原始参数"""
+        import json
+        
+        if not self.original_cross_ib_data:
+            return
+        
+        try:
+            original_data = json.loads(self.original_cross_ib_data)
+            
+            self.cross_ib_list.clear()
+            for item_data in original_data:
+                new_item = self.cross_ib_list.add()
+                new_item.source_index_count = item_data['source_index_count']
+                new_item.target_index_count = item_data['target_index_count']
+            
+            print(f"[CrossIB] 已恢复节点 {self.name} 的原始参数，共 {len(original_data)} 条")
+            
+            # 清除保存的数据
+            self.original_cross_ib_data = ""
+        except Exception as e:
+            print(f"[CrossIB] 恢复节点 {self.name} 的原始参数失败: {e}")
+    
+    def apply_indexcount_mapping(self, indexcount_mapping):
+        """
+        应用IndexCount映射（由物体名称修改节点调用）
+        
+        Args:
+            indexcount_mapping: 字典，格式为 {原始IndexCount: 新IndexCount}
+                               例如: {"59679": "2280"}
+                               
+        这个方法会遍历跨IB节点的映射列表，同时修改source_index_count和target_index_count
+        """
+        if not indexcount_mapping:
+            return
+        
+        print(f"[CrossIB] 开始应用IndexCount映射，共 {len(indexcount_mapping)} 条规则")
+        
+        updated_count = 0
+        for item in self.cross_ib_list:
+            original_source = item.source_index_count
+            original_target = item.target_index_count
+            
+            if original_source in indexcount_mapping:
+                new_source = indexcount_mapping[original_source]
+                item.source_index_count = new_source
+                print(f"[CrossIB] 更新源映射: {original_source} -> {new_source}")
+                updated_count += 1
+            
+            if original_target in indexcount_mapping:
+                new_target = indexcount_mapping[original_target]
+                item.target_index_count = new_target
+                print(f"[CrossIB] 更新目标映射: {original_target} -> {new_target}")
+                updated_count += 1
+        
+        print(f"[CrossIB] IndexCount映射应用完成，更新了 {updated_count} 条映射")
 
 
 class SSMTNode_PostProcess_CrossIB(SSMTNodeBase):

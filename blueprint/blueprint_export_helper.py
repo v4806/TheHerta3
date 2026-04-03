@@ -180,6 +180,8 @@ class BlueprintExportHelper:
                 key_index += 1
             
             for node in current_tree.nodes:
+                if node.mute:
+                    continue
                 if node.bl_idname == 'SSMTNode_Blueprint_Nest':
                     blueprint_name = getattr(node, 'blueprint_name', '')
                     if blueprint_name and blueprint_name != 'NONE':
@@ -217,6 +219,8 @@ class BlueprintExportHelper:
                 datatype_nodes.extend(nodes)
             
             for node in current_tree.nodes:
+                if node.mute:
+                    continue
                 if node.bl_idname == 'SSMTNode_Blueprint_Nest':
                     blueprint_name = getattr(node, 'blueprint_name', '')
                     if blueprint_name and blueprint_name != 'NONE':
@@ -540,35 +544,13 @@ class BlueprintExportHelper:
     
     @staticmethod
     def clear_postprocess_caches():
-        """清除所有后处理节点的缓存（在每次导出开始时调用）"""
-        from .blueprint_node_postprocess_material import clear_name_mapping_cache
-        clear_name_mapping_cache()
+        """清除所有后处理节点的缓存"""
+        from .blueprint_node_postprocess_material import clear_name_mapping_cache as clear_material_name_mapping_cache
+        from .blueprint_node_postprocess_shapekey import clear_name_mapping_cache as clear_shapekey_name_mapping_cache
         
-        tree = BlueprintExportHelper.get_current_blueprint_tree()
-        if not tree:
-            return
+        clear_material_name_mapping_cache()
+        clear_shapekey_name_mapping_cache()
         
-        visited_blueprints = set()
-        
-        def clear_shapekey_mapping(current_tree):
-            """递归清除形态键节点的名称映射"""
-            if current_tree.name in visited_blueprints:
-                return
-            visited_blueprints.add(current_tree.name)
-            
-            for node in current_tree.nodes:
-                if node.bl_idname == 'SSMTNode_PostProcess_ShapeKey':
-                    if hasattr(node, 'name_mapping'):
-                        node.name_mapping = ""
-                        print(f"[ShapeKey] 已清除节点 {node.name} 的名称映射")
-                elif node.bl_idname == 'SSMTNode_Blueprint_Nest':
-                    blueprint_name = getattr(node, 'blueprint_name', '')
-                    if blueprint_name and blueprint_name != 'NONE':
-                        nested_tree = bpy.data.node_groups.get(blueprint_name)
-                        if nested_tree and nested_tree.bl_idname == 'SSMTBlueprintTreeType':
-                            clear_shapekey_mapping(nested_tree)
-        
-        clear_shapekey_mapping(tree)
         print("[PostProcess] 已清除所有后处理节点的缓存")
     
     @staticmethod
@@ -709,8 +691,104 @@ class BlueprintExportHelper:
                         cross_ib_info_dict[source_ib].append(target_ib)
         
         return cross_ib_info_dict, cross_ib_method_dict
-
-
-
-            
+    
+    @staticmethod
+    def apply_name_modify_to_crossib_nodes():
+        """应用物体名称修改节点的映射到跨IB节点
         
+        这个方法会在导出阶段之前执行，确保跨IB节点的映射信息是最新的
+        只处理连接到输出节点链路中的物体名称修改节点
+        """
+        tree = BlueprintExportHelper.get_current_blueprint_tree()
+        if not tree:
+            return
+        
+        output_node = BlueprintExportHelper.get_node_from_bl_idname(tree, 'SSMTNode_Result_Output')
+        if not output_node:
+            return
+        
+        name_modify_nodes = []
+        visited_nodes = set()
+        
+        def collect_name_modify_nodes_from_inputs(node):
+            """从节点的输入插槽向前递归收集名称修改节点"""
+            if node.name in visited_nodes:
+                return
+            visited_nodes.add(node.name)
+            
+            for input_socket in node.inputs:
+                if input_socket.is_linked:
+                    for link in input_socket.links:
+                        source_node = link.from_node
+                        
+                        if source_node.mute:
+                            continue
+                        
+                        if source_node.bl_idname == 'SSMTNode_Object_Name_Modify':
+                            if source_node not in name_modify_nodes:
+                                name_modify_nodes.append(source_node)
+                        
+                        # 继续向前查找
+                        collect_name_modify_nodes_from_inputs(source_node)
+        
+        collect_name_modify_nodes_from_inputs(output_node)
+        
+        if not name_modify_nodes:
+            return
+        
+        print(f"[NameModify] 找到 {len(name_modify_nodes)} 个连接到输出链路的物体名称修改节点")
+        
+        for name_modify_node in name_modify_nodes:
+            if not name_modify_node.is_valid():
+                continue
+            
+            indexcount_mapping = name_modify_node.get_indexcount_mapping()
+            if not indexcount_mapping:
+                continue
+            
+            print(f"[NameModify] 节点 {name_modify_node.name} 提取到 {len(indexcount_mapping)} 条IndexCount映射")
+            
+            visited_crossib = set()
+            
+            def apply_to_upstream_crossib(node):
+                """向上游查找跨IB节点并应用映射"""
+                if node.name in visited_crossib:
+                    return
+                visited_crossib.add(node.name)
+                
+                if node.bl_idname == 'SSMTNode_CrossIB':
+                    if hasattr(node, 'save_original_params'):
+                        node.save_original_params()
+                    if hasattr(node, 'apply_indexcount_mapping'):
+                        node.apply_indexcount_mapping(indexcount_mapping)
+                    return
+                
+                for input_socket in node.inputs:
+                    if input_socket.is_linked:
+                        for link in input_socket.links:
+                            source_node = link.from_node
+                            if not source_node.mute:
+                                apply_to_upstream_crossib(source_node)
+            
+            for link in name_modify_node.inputs[0].links:
+                apply_to_upstream_crossib(link.from_node)
+    
+    @staticmethod
+    def restore_crossib_nodes_params():
+        """恢复所有跨IB节点的原始参数
+        
+        这个方法会在导出完成后执行，确保下次导出时参数是原始值
+        只恢复那些保存过原始参数的节点
+        """
+        cross_ib_nodes = BlueprintExportHelper.get_cross_ib_nodes()
+        
+        restored_count = 0
+        for node in cross_ib_nodes:
+            # 只恢复有原始数据的节点
+            if hasattr(node, 'original_cross_ib_data') and node.original_cross_ib_data:
+                if hasattr(node, 'restore_original_params'):
+                    node.restore_original_params()
+                    restored_count += 1
+        
+        if restored_count > 0:
+            print(f"[CrossIB] 已恢复 {restored_count} 个跨IB节点的原始参数")

@@ -202,6 +202,205 @@ def draw_objects_context_menu_add(self, context):
     layout.separator()
     layout.menu("SSMT_MT_ObjectContextMenuSub", text="SSMT蓝图架构", icon='NODETREE')
 
+
+class SSMT_OT_QuickCreateVertexGroupMatch(bpy.types.Operator):
+    '''快速创建顶点组匹配节点（选择两个物体：活动物体为目标，另一个为源）'''
+    bl_idname = "ssmt.quick_create_vertex_group_match"
+    bl_label = "快速创建顶点组匹配节点"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def _extract_prefix(self, obj_name):
+        """提取物体名称的前缀"""
+        if "." in obj_name:
+            obj_name_total_split = obj_name.split(".")
+            return obj_name_total_split[0]
+        elif "-" in obj_name:
+            obj_name_split = obj_name.split("-")
+            if len(obj_name_split) >= 2:
+                return f"{obj_name_split[0]}-{obj_name_split[1]}"
+            return obj_name_split[0]
+        return obj_name
+    
+    def execute(self, context):
+        selected_objects = context.selected_objects
+        
+        if len(selected_objects) != 2:
+            self.report({'WARNING'}, "请选择恰好两个物体（活动物体为目标，另一个为源）")
+            return {'CANCELLED'}
+        
+        target_obj = context.active_object
+        if not target_obj or target_obj not in selected_objects:
+            self.report({'WARNING'}, "请确保活动物体是选中的两个物体之一")
+            return {'CANCELLED'}
+        
+        source_obj = [obj for obj in selected_objects if obj != target_obj][0]
+        
+        node_tree = self._get_blueprint_tree(context)
+        if not node_tree:
+            self.report({'WARNING'}, "未找到有效的蓝图树")
+            return {'CANCELLED'}
+        
+        nodes = node_tree.nodes
+        
+        base_x = 0
+        if nodes:
+            max_x = max([node.location.x + node.width for node in nodes])
+            base_x = max_x + 200
+        
+        target_prefix = self._extract_prefix(target_obj.name)
+        
+        vg_match_node = nodes.new(type='SSMTNode_VertexGroupMatch')
+        vg_match_node.location = (base_x, 0)
+        vg_match_node.source_object = source_obj.name
+        vg_match_node.target_object = target_obj.name
+        vg_match_node.target_hash = target_prefix
+        vg_match_node.label = f"VG匹配: {source_obj.name} → {target_obj.name}"
+        
+        for node in nodes:
+            node.select = False
+        vg_match_node.select = True
+        
+        self.report({'INFO'}, f"已创建顶点组匹配节点: {source_obj.name} → {target_obj.name} (目标哈希: {target_prefix})")
+        return {'FINISHED'}
+    
+    def _get_blueprint_tree(self, context):
+        node_tree = None
+        
+        space_data = getattr(context, "space_data", None)
+        if space_data and space_data.type == 'NODE_EDITOR':
+            node_tree = getattr(space_data, "edit_tree", None) or getattr(space_data, "node_tree", None)
+        
+        if not node_tree:
+            for window in context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == 'NODE_EDITOR':
+                        for space in area.spaces:
+                            if space.type == 'NODE_EDITOR':
+                                tree = getattr(space, "edit_tree", None) or getattr(space, "node_tree", None)
+                                if tree and tree.bl_idname == 'SSMTBlueprintTreeType':
+                                    node_tree = tree
+                                    break
+                        if node_tree:
+                            break
+                if node_tree:
+                    break
+        
+        if not node_tree:
+            from ..config.main_config import GlobalConfig
+            GlobalConfig.read_from_main_json()
+            workspace_name = f"Mod_{GlobalConfig.workspacename}" if GlobalConfig.workspacename else "SSMT_Mod_Logic"
+            node_tree = bpy.data.node_groups.get(workspace_name)
+        
+        if node_tree and node_tree.bl_idname == 'SSMTBlueprintTreeType':
+            return node_tree
+        return None
+
+
+class SSMT_OT_QuickAddNameMapping(bpy.types.Operator):
+    '''快速添加物体名称修改映射（选择两个物体：活动物体为目标，另一个为源）'''
+    bl_idname = "ssmt.quick_add_name_mapping"
+    bl_label = "快速添加名称映射"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def _extract_prefix(self, obj_name):
+        """提取物体名称的前缀"""
+        if "." in obj_name:
+            obj_name_total_split = obj_name.split(".")
+            return obj_name_total_split[0]
+        elif "-" in obj_name:
+            obj_name_split = obj_name.split("-")
+            if len(obj_name_split) >= 2:
+                return f"{obj_name_split[0]}-{obj_name_split[1]}"
+            return obj_name_split[0]
+        return obj_name
+    
+    def execute(self, context):
+        selected_objects = context.selected_objects
+        
+        if len(selected_objects) != 2:
+            self.report({'WARNING'}, "请选择恰好两个物体（活动物体为目标，另一个为源）")
+            return {'CANCELLED'}
+        
+        target_obj = context.active_object
+        if not target_obj or target_obj not in selected_objects:
+            self.report({'WARNING'}, "请确保活动物体是选中的两个物体之一")
+            return {'CANCELLED'}
+        
+        source_obj = [obj for obj in selected_objects if obj != target_obj][0]
+        
+        node_tree = self._get_blueprint_tree(context)
+        if not node_tree:
+            self.report({'WARNING'}, "未找到有效的蓝图树")
+            return {'CANCELLED'}
+        
+        name_modify_nodes = [node for node in node_tree.nodes if node.bl_idname == 'SSMTNode_Object_Name_Modify']
+        
+        if not name_modify_nodes:
+            nodes = node_tree.nodes
+            base_x = 0
+            if nodes:
+                max_x = max([node.location.x + node.width for node in nodes])
+                base_x = max_x + 200
+            
+            name_modify_node = nodes.new(type='SSMTNode_Object_Name_Modify')
+            name_modify_node.location = (base_x, 0)
+            name_modify_node.label = "名称修改"
+            name_modify_nodes = [name_modify_node]
+            
+            for node in nodes:
+                node.select = False
+            name_modify_node.select = True
+        
+        source_prefix = self._extract_prefix(source_obj.name)
+        target_prefix = self._extract_prefix(target_obj.name)
+        
+        for name_modify_node in name_modify_nodes:
+            new_item = name_modify_node.mapping_list.add()
+            new_item.original_name = source_prefix
+            new_item.new_name = target_prefix
+            name_modify_node.active_mapping_index = len(name_modify_node.mapping_list) - 1
+        
+        node_count = len(name_modify_nodes)
+        if node_count == 1:
+            self.report({'INFO'}, f"已添加映射: {source_prefix} → {target_prefix}")
+        else:
+            self.report({'INFO'}, f"已在 {node_count} 个名称修改节点中添加映射: {source_prefix} → {target_prefix}")
+        
+        return {'FINISHED'}
+    
+    def _get_blueprint_tree(self, context):
+        node_tree = None
+        
+        space_data = getattr(context, "space_data", None)
+        if space_data and space_data.type == 'NODE_EDITOR':
+            node_tree = getattr(space_data, "edit_tree", None) or getattr(space_data, "node_tree", None)
+        
+        if not node_tree:
+            for window in context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type == 'NODE_EDITOR':
+                        for space in area.spaces:
+                            if space.type == 'NODE_EDITOR':
+                                tree = getattr(space, "edit_tree", None) or getattr(space, "node_tree", None)
+                                if tree and tree.bl_idname == 'SSMTBlueprintTreeType':
+                                    node_tree = tree
+                                    break
+                        if node_tree:
+                            break
+                if node_tree:
+                    break
+        
+        if not node_tree:
+            from ..config.main_config import GlobalConfig
+            GlobalConfig.read_from_main_json()
+            workspace_name = f"Mod_{GlobalConfig.workspacename}" if GlobalConfig.workspacename else "SSMT_Mod_Logic"
+            node_tree = bpy.data.node_groups.get(workspace_name)
+        
+        if node_tree and node_tree.bl_idname == 'SSMTBlueprintTreeType':
+            return node_tree
+        return None
+
+
 class SSMT_MT_ObjectContextMenuSub(bpy.types.Menu):
     bl_label = "SSMT蓝图架构"
     
@@ -209,6 +408,9 @@ class SSMT_MT_ObjectContextMenuSub(bpy.types.Menu):
         layout = self.layout
         layout.operator("ssmt.create_group_from_selection", text="将所选物体新建到组节点", icon='GROUP')
         layout.operator("ssmt.create_internal_switch", text="创建内部切换", icon='ARROW_LEFTRIGHT')
+        layout.separator()
+        layout.operator("ssmt.quick_create_vertex_group_match", text="快速创建顶点组匹配节点", icon='GROUP')
+        layout.operator("ssmt.quick_add_name_mapping", text="快速添加名称映射", icon='SORTALPHA')
 
 
 class SSMT_MT_NodeMenu_Branch(bpy.types.Menu):
@@ -387,16 +589,17 @@ class SSMT_OT_AlignNodes(bpy.types.Operator):
         start_x = column[0].location.x
         start_y = column[0].location.y
         
-        # 固定的垂直间距
-        vertical_spacing = 80.0
+        # 计算列内节点的平均高度（使用dimensions获取实际尺寸）
+        avg_height = sum(node.dimensions.y for node in column if node.dimensions.y > 0) / max(1, sum(1 for node in column if node.dimensions.y > 0))
+        vertical_spacing = avg_height * 0.3
         
         # 对齐节点
         current_y = start_y
         for node in column:
-            # 确保节点位置不重叠
             node.location = (start_x, current_y)
-            # 使用固定的垂直间距
-            current_y -= (node.height + vertical_spacing)
+            # 使用节点的实际高度（dimensions.y）
+            node_height = node.dimensions.y if node.dimensions.y > 0 else avg_height
+            current_y -= (node_height + vertical_spacing)
     
     def align_columns_horizontally(self, columns):
         """对列之间进行横向对齐"""
@@ -810,11 +1013,17 @@ def draw_node_context_menu(self, context):
     
     layout = self.layout
     layout.separator()
+    
+    tree = getattr(context.space_data, "edit_tree", None) or getattr(context.space_data, "node_tree", None)
+    if tree and tree.bl_idname == 'SSMTBlueprintTreeType':
+        op = layout.operator("ssmt.generate_mod_blueprint", text="蓝图导出", icon='EXPORT')
+        op.node_tree_name = tree.name
+    
+    layout.separator()
     layout.operator("ssmt.align_nodes", text="矩阵对齐节点", icon='GRID')
     layout.operator("ssmt.batch_connect_nodes", text="批量连接节点", icon='LINKED')
     layout.separator()
     layout.operator("ssmt.refresh_node_object_ids", text="刷新物体ID关联", icon='FILE_REFRESH')
-    layout.operator("ssmt.check_object_name_changes", text="检查物体名称变化", icon='FILE_REFRESH')
 
 
 def register():
@@ -823,6 +1032,8 @@ def register():
     bpy.utils.register_class(SSMT_OT_AddCommonKeySwitches)
     bpy.utils.register_class(SSMT_OT_AlignNodes)
     bpy.utils.register_class(SSMT_OT_BatchConnectNodes)
+    bpy.utils.register_class(SSMT_OT_QuickCreateVertexGroupMatch)
+    bpy.utils.register_class(SSMT_OT_QuickAddNameMapping)
     bpy.utils.register_class(SSMT_MT_ObjectContextMenuSub)
     bpy.utils.register_class(SSMT_MT_NodeMenu_Advanced)
     bpy.utils.register_class(SSMT_MT_NodeMenu_Preset)
@@ -849,6 +1060,8 @@ def unregister():
     bpy.utils.unregister_class(SSMT_MT_NodeMenu_Preset)
     bpy.utils.unregister_class(SSMT_MT_NodeMenu_Advanced)
     bpy.utils.unregister_class(SSMT_MT_ObjectContextMenuSub)
+    bpy.utils.unregister_class(SSMT_OT_QuickAddNameMapping)
+    bpy.utils.unregister_class(SSMT_OT_QuickCreateVertexGroupMatch)
     bpy.utils.unregister_class(SSMT_OT_BatchConnectNodes)
     bpy.utils.unregister_class(SSMT_OT_AlignNodes)
     bpy.utils.unregister_class(SSMT_OT_AddCommonKeySwitches)

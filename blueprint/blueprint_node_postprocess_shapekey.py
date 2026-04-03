@@ -15,6 +15,15 @@ except ImportError:
 
 from .blueprint_node_postprocess_base import SSMTNode_PostProcess_Base
 
+_name_mapping_cache = {}
+
+
+def clear_name_mapping_cache():
+    """清除名称映射缓存（在每次导出开始时调用）"""
+    global _name_mapping_cache
+    _name_mapping_cache.clear()
+    print("[ShapeKey] 已清除名称映射缓存")
+
 
 class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
     '''形态键配置后处理节点：生成支持多形态叠加混合的INI配置'''
@@ -41,28 +50,16 @@ class SSMTNode_PostProcess_ShapeKey(SSMTNode_PostProcess_Base):
         default=True
     )
 
-    name_mapping: bpy.props.StringProperty(
-        name="名称映射",
-        description="从物体重命名节点传递的名称映射（JSON格式）",
-        default="",
-        options={'HIDDEN'}
-    )
-
     def apply_name_mapping(self, mapping):
         """接收从物体重命名节点传递的名称映射"""
-        import json
-        self.name_mapping = json.dumps(mapping)
+        global _name_mapping_cache
+        _name_mapping_cache[self.name] = mapping.copy()
         print(f"[ShapeKey] 已接收名称映射: {mapping}")
 
     def _get_name_mapping(self):
         """获取名称映射字典"""
-        import json
-        if self.name_mapping:
-            try:
-                return json.loads(self.name_mapping)
-            except:
-                return {}
-        return {}
+        global _name_mapping_cache
+        return _name_mapping_cache.get(self.name, {})
 
     def _apply_name_mapping_to_object(self, obj_name):
         """应用名称映射到物体名称"""

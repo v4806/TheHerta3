@@ -346,6 +346,9 @@ class BluePrintModel:
                 return
             visited_nodes.add(node)
             
+            if node.mute:
+                return
+            
             if node.bl_idname == "SSMTNode_Object_Info":
                 obj_name = getattr(node, 'object_name', '')
                 if obj_name:

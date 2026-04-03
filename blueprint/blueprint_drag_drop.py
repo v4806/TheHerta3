@@ -282,79 +282,8 @@ def check_object_name_changes():
     return 2.0
 
 
-class SSMT_OT_CheckObjectNameChanges(bpy.types.Operator):
-    '''手动检查物体名称变化，并更新对应节点的物体引用'''
-    bl_idname = "ssmt.check_object_name_changes"
-    bl_label = "检查物体名称变化"
-    bl_options = {'REGISTER'}
-    
-    def find_object_by_name_part(self, name_part):
-        """
-        根据名称片段查找物体
-        查找名称中包含指定片段的物体（完全匹配）
-        例如：name_part="玩具眼罩" 可以匹配 "8c5b553a-1-玩具眼罩"
-        """
-        if not name_part:
-            return None
-        
-        exact_match = bpy.data.objects.get(name_part)
-        if exact_match:
-            return exact_match
-        
-        for obj in bpy.data.objects:
-            if name_part in obj.name:
-                return obj
-        
-        return None
-    
-    def execute(self, context):
-        global _node_to_object_id_mapping
-        
-        updated_count = 0
-        
-        for tree in bpy.data.node_groups:
-            if tree.bl_idname == 'SSMTBlueprintTreeType':
-                for node in tree.nodes:
-                    if node.bl_idname == 'SSMTNode_Object_Info':
-                        obj_name = getattr(node, 'object_name', '')
-                        if not obj_name:
-                            continue
-                        
-                        current_obj = bpy.data.objects.get(obj_name)
-                        if current_obj:
-                            continue
-                        
-                        new_obj = self.find_object_by_name_part(obj_name)
-                        if new_obj and new_obj.name != obj_name:
-                            node.object_name = new_obj.name
-                            node.object_id = str(new_obj.as_pointer())
-                            updated_count += 1
-                    elif node.bl_idname == 'SSMTNode_MultiFile_Export':
-                        for item in node.object_list:
-                            obj_name = getattr(item, 'object_name', '')
-                            if not obj_name:
-                                continue
-                            
-                            current_obj = bpy.data.objects.get(obj_name)
-                            if current_obj:
-                                continue
-                            
-                            new_obj = self.find_object_by_name_part(obj_name)
-                            if new_obj and new_obj.name != obj_name:
-                                item.object_name = new_obj.name
-                                updated_count += 1
-        
-        if updated_count > 0:
-            self.report({'INFO'}, f"已更新 {updated_count} 个节点的物体引用")
-        else:
-            self.report({'INFO'}, "所有节点的物体引用都是最新的")
-        
-        return {'FINISHED'}
-
-
 def register():
     global _node_selection_timer, _object_name_check_timer
-    bpy.utils.register_class(SSMT_OT_CheckObjectNameChanges)
     bpy.app.handlers.depsgraph_update_post.append(object_visibility_handler)
     bpy.app.handlers.depsgraph_update_post.append(object_selection_handler)
     
@@ -384,8 +313,6 @@ def unregister():
         bpy.app.handlers.depsgraph_update_post.remove(object_visibility_handler)
     if object_selection_handler in bpy.app.handlers.depsgraph_update_post:
         bpy.app.handlers.depsgraph_update_post.remove(object_selection_handler)
-    
-    bpy.utils.unregister_class(SSMT_OT_CheckObjectNameChanges)
     
     global _object_to_node_mapping, _node_to_object_id_mapping, _is_importing, _syncing_selection, _last_node_selection_state, _cleanup_counter
     _object_to_node_mapping = {}

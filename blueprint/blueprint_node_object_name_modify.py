@@ -87,6 +87,9 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
                 return
             visited.add(node)
             
+            if node.mute:
+                return
+            
             if node.bl_idname == 'SSMTNode_Object_Info':
                 obj_name = getattr(node, 'object_name', '')
                 if obj_name:
@@ -192,6 +195,41 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
                     mapping[original] = new
         return mapping
     
+    def get_indexcount_mapping(self):
+        """从物体名称映射中提取IndexCount的映射关系
+        
+        物体名称格式：{ib_hash}-{index_count}-{first_index}.{可选别名}
+        例如：1377f2c3-59679-0 -> e3a38935-2280-0
+        提取的IndexCount映射：59679 -> 2280
+        
+        返回格式：{原始IndexCount: 新IndexCount}
+        """
+        import re
+        indexcount_mapping = {}
+        
+        for item in self.mapping_list:
+            original = item.original_name
+            new = item.new_name
+            
+            if self.reverse_mapping:
+                original, new = new, original
+            
+            if not original or not new:
+                continue
+            
+            original_match = re.match(r'^[a-f0-9]{8}-([0-9]+)-[0-9]+', original)
+            new_match = re.match(r'^[a-f0-9]{8}-([0-9]+)-[0-9]+', new)
+            
+            if original_match and new_match:
+                original_indexcount = original_match.group(1)
+                new_indexcount = new_match.group(1)
+                
+                if original_indexcount and new_indexcount:
+                    indexcount_mapping[original_indexcount] = new_indexcount
+                    print(f"[NameModify] 提取IndexCount映射: {original_indexcount} -> {new_indexcount}")
+        
+        return indexcount_mapping
+    
     def is_valid(self):
         if len(self.mapping_list) == 0:
             return False
@@ -214,6 +252,9 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
             if node in visited:
                 return
             visited.add(node)
+            
+            if node.mute:
+                return
             
             if node.bl_idname == 'SSMTNode_Object_Info':
                 obj_name = getattr(node, 'object_name', '')
@@ -248,10 +289,9 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
     
     def execute_postprocess(self, mod_export_path):
         """
-        后处理阶段执行：修改配置表中的物体名称（仅用于识别）
+        后处理阶段执行：传递名称映射给下游后处理节点
         
-        这个方法会在导出完成后执行，用于修改后续后处理节点接收到的配置表信息。
-        主要用于跨IB节点等需要识别物体名称的场景。
+        注意：跨IB节点的IndexCount映射已经在导出阶段之前应用了
         """
         print(f"[NameModify] 后处理阶段开始执行，Mod导出路径: {mod_export_path}")
         
@@ -262,12 +302,50 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
         mapping = self.get_mapping_dict()
         print(f"[NameModify] 映射字典: {mapping}")
         
-        self._propagate_mapping_to_downstream_nodes(mapping)
+        self._propagate_mapping_to_downstream_postprocess_nodes(mapping)
         
         print(f"[NameModify] 后处理阶段执行完成")
     
-    def _propagate_mapping_to_downstream_nodes(self, mapping):
-        """递归地将映射传递给所有下游后处理节点"""
+    def _apply_indexcount_mapping_to_upstream_crossib_nodes(self, indexcount_mapping):
+        """将IndexCount映射应用到所有上游连接的跨IB节点（通过Object Output连接）
+        
+        注意：此方法现在主要作为备用，实际应用在导出阶段之前通过 BlueprintExportHelper 调用
+        """
+        if not indexcount_mapping:
+            return
+        
+        visited = set()
+        crossib_nodes = []
+        
+        def collect_upstream_crossib_nodes(node):
+            """递归收集所有上游连接的跨IB节点"""
+            if node.name in visited:
+                return
+            visited.add(node.name)
+            
+            if node.bl_idname == 'SSMTNode_CrossIB':
+                crossib_nodes.append(node)
+                print(f"[NameModify] 找到上游跨IB节点: {node.name}")
+                return
+            
+            for input_socket in node.inputs:
+                if input_socket.is_linked:
+                    for link in input_socket.links:
+                        source_node = link.from_node
+                        if not source_node.mute:
+                            collect_upstream_crossib_nodes(source_node)
+        
+        for link in self.inputs[0].links:
+            collect_upstream_crossib_nodes(link.from_node)
+        
+        if crossib_nodes:
+            print(f"[NameModify] 找到 {len(crossib_nodes)} 个上游跨IB节点，开始应用IndexCount映射")
+            for crossib_node in crossib_nodes:
+                if hasattr(crossib_node, 'apply_indexcount_mapping'):
+                    crossib_node.apply_indexcount_mapping(indexcount_mapping)
+    
+    def _propagate_mapping_to_downstream_postprocess_nodes(self, mapping):
+        """递归地将映射传递给所有下游后处理节点（通过Post Process输出连接）"""
         visited = set()
         
         def propagate(node):
@@ -275,19 +353,27 @@ class SSMTNode_Object_Name_Modify(SSMTNodeBase):
                 return
             visited.add(node.name)
             
+            postprocess_output = None
             for output in node.outputs:
-                if output.is_linked:
-                    for link in output.links:
-                        target_node = link.to_node
+                if output.name == "Post Process" or output.bl_idname == 'SSMTSocketPostProcess':
+                    postprocess_output = output
+                    break
+            
+            if not postprocess_output:
+                return
+            
+            if postprocess_output.is_linked:
+                for link in postprocess_output.links:
+                    target_node = link.to_node
+                    
+                    if target_node.bl_idname.startswith('SSMTNode_PostProcess') or \
+                       target_node.bl_idname == 'SSMTNode_Object_Name_Modify':
                         
-                        if target_node.bl_idname.startswith('SSMTNode_PostProcess') or \
-                           target_node.bl_idname == 'SSMTNode_Object_Name_Modify':
-                            
-                            if hasattr(target_node, 'apply_name_mapping'):
-                                target_node.apply_name_mapping(mapping)
-                                print(f"[NameModify] 已将映射传递给节点: {target_node.name}")
-                            
-                            propagate(target_node)
+                        if hasattr(target_node, 'apply_name_mapping'):
+                            target_node.apply_name_mapping(mapping)
+                            print(f"[NameModify] 已将名称映射传递给节点: {target_node.name}")
+                        
+                        propagate(target_node)
         
         propagate(self)
 

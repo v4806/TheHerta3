@@ -133,6 +133,25 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         # 记录原始上下文状态
         original_user_context = get_user_context(context)
         
+        # 确保在物体模式下进行导出操作（兼容编辑模式、姿态模式等）
+        # 这样可以避免模式限制导致的导出问题
+        try:
+            if context.active_object and context.active_object.mode != 'OBJECT':
+                original_mode = context.active_object.mode
+                active_obj = context.active_object
+                
+                # 在切换模式前，保存编辑模式的修改（如删除面、修改顶点等）
+                if original_mode == 'EDIT':
+                    active_obj.update_from_editmode()
+                    print(f"[Export] 已保存编辑模式的修改")
+                
+                # 权重模式下修改的权重数据会自动保存，但需要确保切换模式
+                # 姿态模式下的修改也会在切换模式时自动保存
+                bpy.ops.object.mode_set(mode='OBJECT')
+                print(f"[Export] 已从 {original_mode} 模式切换到物体模式")
+        except Exception as e:
+            print(f"[Export] 模式切换警告: {e}")
+        
         wm = context.window_manager
 
         target_tree_name = self.node_tree_name
@@ -238,6 +257,11 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             
             # 重置导出状态
             BlueprintExportHelper.reset_export_state()
+            
+            # 应用物体名称修改节点的映射到跨IB节点
+            start_operation("ApplyNameModifyToCrossIB")
+            BlueprintExportHelper.apply_name_modify_to_crossib_nodes()
+            end_operation("ApplyNameModifyToCrossIB")
             
             # 循环执行多次导出
             for export_index in range(1, max_export_count + 1):
@@ -354,6 +378,11 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             BlueprintExportHelper.execute_postprocess_nodes(mod_export_path)
             end_operation("PostProcessNodes")
             
+            # 恢复跨IB节点的原始参数
+            start_operation("RestoreCrossIBParams")
+            BlueprintExportHelper.restore_crossib_nodes_params()
+            end_operation("RestoreCrossIBParams")
+            
             # 完成进度
             wm.progress_update(100)
             wm.progress_end()
@@ -401,7 +430,11 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         return {'FINISHED'}
     
     def _get_export_objects_with_nodes(self):
-        """获取当前蓝图中所有要导出的物体及其对应的节点，支持递归扫描嵌套蓝图"""
+        """获取当前蓝图中所有要导出的物体及其对应的节点，支持递归扫描嵌套蓝图
+        
+        注意：此方法不检查物体的隐藏状态，隐藏物体也会被收集
+        隐藏状态的处理在预处理阶段进行
+        """
         result = []
         tree = BlueprintExportHelper.get_current_blueprint_tree()
         if not tree:
@@ -566,6 +599,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                     start_operation("LinkCopy", obj_name)
                     copy_obj.name = copy_name
                     bpy.context.scene.collection.objects.link(copy_obj)
+                    copy_obj.hide_set(False)
+                    if copy_obj.name in bpy.context.view_layer.objects:
+                        bpy.context.view_layer.objects[copy_obj.name].hide_viewport = False
                     end_operation("LinkCopy")
                     
                     has_armature = any(mod.type == 'ARMATURE' for mod in copy_obj.modifiers)
@@ -633,6 +669,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             if node in visited:
                 return
             visited.add(node)
+            
+            if node.mute:
+                return
             
             if node.bl_idname == 'SSMTNode_VertexGroupProcess':
                 all_process_nodes.append((node, 'vg_process'))
@@ -957,6 +996,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
                 return
             visited.add(node)
             
+            if node.mute:
+                return
+            
             # 如果是名称修改节点，添加到结果中
             if node.bl_idname == 'SSMTNode_Object_Name_Modify':
                 result.append(node)
@@ -971,6 +1013,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         
         def collect_nested_blueprint_nodes(nest_node, current_tree):
             """递归收集嵌套蓝图中的名称修改节点"""
+            if nest_node.mute:
+                return
+            
             blueprint_name = getattr(nest_node, 'blueprint_name', '')
             if not blueprint_name:
                 return
@@ -1035,6 +1080,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             if current_node in visited:
                 return []
             visited.add(current_node)
+            
+            if current_node.mute:
+                return []
             
             indent = "  " * depth
             print(f"[VGProcess]{indent} 搜索节点: {current_node.name} (类型: {current_node.bl_idname})")
@@ -1139,6 +1187,9 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
             if current_node in visited:
                 return []
             visited.add(current_node)
+            
+            if current_node.mute:
+                return []
             
             object_names = []
             
