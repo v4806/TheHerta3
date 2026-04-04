@@ -51,9 +51,15 @@ class TBNCodec:
         Returns:
             shape (N, 2) 的 float32 编码向量
         """
-        n = normals / numpy.linalg.norm(normals, axis=1, keepdims=True)
+        # 计算法线长度
+        norms = numpy.linalg.norm(normals, axis=1, keepdims=True)
+        # 避免除以0，使用clip
+        norms = numpy.clip(norms, 1e-8, None)
+        n = normals / norms
 
         inv_l1 = 1.0 / numpy.sum(numpy.abs(n), axis=1, keepdims=True)
+        # 避免除以0
+        inv_l1 = numpy.clip(inv_l1, 1e-8, None)
         n *= inv_l1
 
         mask = n[:, 2] < 0
@@ -114,6 +120,11 @@ class TBNCodec:
         flags = data[:, 3:].astype(numpy.int32)
         data_vals = data[:, 0:3]
 
+        # 处理 NaN 和无穷大值
+        data_vals = numpy.nan_to_num(data_vals, nan=0.0, posinf=1.0, neginf=-1.0)
+        # 确保值在合理范围内
+        data_vals = numpy.clip(data_vals, -1.0, 1.0)
+        
         data_vals = numpy.rint(data_vals * 511).astype(numpy.int32)
         data_vals = numpy.clip(data_vals, -511, 511)
         data_vals &= 0x3FF
@@ -154,7 +165,12 @@ class TBNCodec:
                 numpy.array([0.0, 1.0, 0.0])
             )
             v_perp = numpy.cross(normals, helper)
-            v_perp /= numpy.linalg.norm(v_perp, axis=1, keepdims=True)
+            # 避免除以0
+            v_perp_norm = numpy.linalg.norm(v_perp, axis=1, keepdims=True)
+            v_perp_norm = numpy.clip(v_perp_norm, 1e-8, None)
+            v_perp /= v_perp_norm
+            # 避免除以0
+            R_norm = numpy.clip(R_norm, 1e-8, None)
             R = numpy.where(small_mask[:, None], v_perp, R / R_norm)
 
         B = numpy.cross(R, normals)
@@ -166,6 +182,8 @@ class TBNCodec:
         sin_theta = numpy.clip(sin_theta, -1.0, 1.0)
 
         denom = numpy.abs(cos_theta) + numpy.abs(sin_theta)
+        # 避免除以0
+        denom = numpy.clip(denom, 1e-8, None)
         u_t = cos_theta / denom
         t = 1 - (1 - u_t) / 2.0
 
