@@ -58,8 +58,9 @@ class TBNCodec:
         n = normals / norms
 
         inv_l1 = 1.0 / numpy.sum(numpy.abs(n), axis=1, keepdims=True)
-        # 避免除以0
-        inv_l1 = numpy.clip(inv_l1, 1e-8, None)
+        # 避免除以0和处理无效值
+        inv_l1 = numpy.nan_to_num(inv_l1, nan=0.0, posinf=1e8, neginf=-1e8)
+        inv_l1 = numpy.clip(inv_l1, 1e-8, 1e8)
         n *= inv_l1
 
         mask = n[:, 2] < 0

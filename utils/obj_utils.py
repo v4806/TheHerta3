@@ -605,9 +605,9 @@ class ObjUtils:
         if len(mesh_objects) < 1:
             non_mesh_objects = [obj.name for obj in obj_list if obj and obj.type != 'MESH']
             if non_mesh_objects:
+                # 只在有非网格对象时打印警告
                 print(f"警告: 没有可供合并的网格数据，以下物体不是网格类型: {', '.join(non_mesh_objects)}")
-            else:
-                print("警告: 没有可供合并的网格数据")
+            # 空列表时不打印警告
             return
         
         # 如果目标集合未指定，则使用当前场景的默认集合
