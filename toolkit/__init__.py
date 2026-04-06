@@ -391,8 +391,16 @@ def register():
     bpy.utils.register_class(TT_LightmapPanel)
     bpy.utils.register_class(TT_MaterialPreviewPanel)
     
-    for panel_class in ui_panel_animation_list:
-        bpy.utils.register_class(panel_class)
+    bpy.utils.register_class(ui_panel_animation_list[0])
+    bpy.utils.register_class(ui_panel_animation_list[1])
+    bpy.utils.register_class(ui_panel_animation_list[2])
+    bpy.utils.register_class(ui_panel_animation_list[3])
+    bpy.utils.register_class(ui_panel_animation_list[4])
+    bpy.utils.register_class(ui_panel_animation_list[5])
+    bpy.utils.register_class(ui_panel_animation_list[6])
+    bpy.utils.register_class(ui_panel_animation_list[7])
+    bpy.utils.register_class(ui_panel_animation_list[8])
+    bpy.utils.register_class(ui_panel_animation_list[9])
     
     print("[TheHerta3] 工具集注册完成")
 
