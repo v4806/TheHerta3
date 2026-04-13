@@ -98,18 +98,7 @@ class SSMTGenerateModBlueprint(bpy.types.Operator):
         if target_tree_name:
             BlueprintExportHelper.forced_target_tree_name = target_tree_name
         
-        has_special_nodes, node_types = BlueprintExportHelper.has_special_postprocess_nodes()
-        
-        if has_special_nodes:
-            mod_export_path = GlobalConfig.path_generate_mod_folder()
-            
-            if mod_export_path and os.path.exists(mod_export_path):
-                if os.listdir(mod_export_path):
-                    self._special_node_types = node_types
-                    self._export_path = mod_export_path
-                    return context.window_manager.invoke_props_dialog(self, width=400)
-        
-        BlueprintExportHelper.forced_target_tree_name = None
+        # 直接执行导出，跳过目录不为空的警告弹窗
         return self.execute(context)
 
     def draw(self, context):
